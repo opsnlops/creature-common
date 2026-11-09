@@ -88,6 +88,20 @@ target_include_directories(creature_thread PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/in
 target_link_libraries(creature_thread PUBLIC Threads::Threads)
 target_compile_options(creature_thread PRIVATE ${CREATURE_COMMON_WARNINGS})
 
+# ---- creature::timesync ------------------------------------------------------
+# PTP and system clock health, shared by the controllers and the server. The
+# controllers are clients; the server is the grandmaster, and the evaluation is
+# role-aware rather than duplicated per side (#3).
+add_library(creature_timesync STATIC
+        src/timesync/PtpManagement.cpp
+        src/timesync/TimeSync.cpp
+        src/timesync/TimeSyncMonitor.cpp
+)
+add_library(creature::timesync ALIAS creature_timesync)
+target_include_directories(creature_timesync PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(creature_timesync PUBLIC creature::logging)
+target_compile_options(creature_timesync PRIVATE ${CREATURE_COMMON_WARNINGS})
+
 if(CREATURE_COMMON_BUILD_TESTS)
     include(CTest)
     include(FetchContent)
@@ -102,8 +116,10 @@ if(CREATURE_COMMON_BUILD_TESTS)
             tests/rtp/Protocol_test.cpp
             tests/rtp/RtcpPacket_test.cpp
             tests/thread/ThreadName_test.cpp
+            tests/timesync/PtpManagement_test.cpp
+            tests/timesync/TimeSync_test.cpp
     )
-    target_link_libraries(creature-common-test PRIVATE creature::mdns creature::rtp creature::thread gtest_main gmock)
+    target_link_libraries(creature-common-test PRIVATE creature::mdns creature::rtp creature::thread creature::timesync gtest_main gmock)
     target_compile_options(creature-common-test PRIVATE ${CREATURE_COMMON_WARNINGS})
 
     include(GoogleTest)
