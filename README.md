@@ -15,6 +15,8 @@ diverged fork of the audio output backends.
 |---|---|
 | `creature::logging` | The `Logger` interface, so a library can log without knowing who is listening. Header-only. |
 | `creature::mdns` | DNS-SD service advertising through `avahi-daemon`. |
+| `creature::rtp` | The RTP/RTCP wire contract: ports, payload type, framing, channel groups, and the RTCP Sender Report encode/decode pair. |
+| `creature::thread` | `setThreadName()`, so threads show up by name in `htop` and Instruments. |
 
 ### `creature::logging`
 
@@ -42,6 +44,14 @@ Publishing goes through `avahi-daemon`, so **`AvahiPublisher` is only built on
 Linux**. Elsewhere the record types still compile, `CREATURE_HAS_AVAHI` is
 undefined, and nothing is advertised — which is what you want for a macOS dev
 build.
+
+### `creature::thread`
+
+`creatures::setThreadName()` names the calling thread. Linux only accepts 15
+bytes and rejects anything longer outright, leaving the thread with its
+parent's name, so names are shortened to `MAX_THREAD_NAME_LENGTH` (15 on Linux,
+63 on macOS) rather than lost. `fitThreadName()` shows what a name becomes. On
+other platforms it does nothing and says so at compile time.
 
 ## Using it
 
