@@ -85,16 +85,25 @@ target, and its only dependencies are `Logger` (already here) and a
 This one is not deduplication at all — the server has **no** PTP code. It is the
 same shape as mDNS was: a capability one side has and the other needs.
 
-The argument is specific. `RtpClockMapping.h` declares
-`using WallClock = std::chrono::system_clock`, and `wallClockToNtp()` stamps the
-SR's NTP field from it. If `phc2sys` stops disciplining the server's clock, every
-receiver schedules playout against a bad timestamp and **nothing on the server
-notices**. A `TimeSyncWatcher` there buys a log line when sync is lost and a
-`sync=` entry in the mDNS TXT record.
+**Corrected since first writing.** The server is the PTP *grandmaster*
+(`serverOnly 1`), so phc2sys there runs `CLOCK_REALTIME` → PHC, the opposite
+direction from a client. The clock that can go bad is therefore the one the
+**fleet follows**, not the one the server stamps Sender Reports with. And
+`evaluateTimeSync()` is already role-aware — it checks `portState == "MASTER"`
+and skips the offset-from-master tests — so this is a move, not a port.
 
-One caveat to settle on the way in: `PTP_MAX_OFFSET_NS = 50 µs` is justified as
-"two samples at 48 kHz". That is a receiver-shaped number; the sender likely wants
-its own threshold.
+The real gap is narrower than it first looked: **nothing measures the
+system-to-PHC offset**, which is the phc2sys health signal on a grandmaster.
+`readClock()` uses `adjtimex()` on `CLOCK_REALTIME`, which on a client genuinely
+is a phc2sys check but on the grandmaster measures **NTP**. If phc2sys dies
+there, `CLOCK_REALTIME` stays good, the SR timestamps stay correct in their own
+terms, and the entire fleet follows a free-running PHC away from the schedule
+with nothing noticing.
+
+`PTP_MAX_OFFSET_NS = 50 µs` is fine to share as-is; the grandmaster path never
+reaches it. See creature-common#3 for the full history of the two corrections —
+both came from designing against header comments instead of reading the
+implementation, which is the same trap the RTCP work hit from the other side.
 
 ## Tier 3 — cheap and safe
 
