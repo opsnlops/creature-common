@@ -129,6 +129,32 @@ TEST(RtcpPacket, RoundTripsTheLongestLegalCname) {
     EXPECT_EQ(parsed->canonicalName.size(), 255U);
 }
 
+TEST(RtcpPacket, KeepsSenderCountersIndependentPerReport) {
+    // The builder must hold no state between calls: the server sends one report
+    // per channel in a loop, and a counter leaking from one into the next would
+    // misreport every channel after the first.
+    auto first = testReport(1000U);
+    first.packetCount = 30U;
+    first.octetCount = 40U;
+    auto second = testReport(1001U);
+    second.packetCount = 300U;
+    second.octetCount = 400U;
+
+    const auto firstParsed = parseRtcpSenderReport(buildRtcpSenderReport(first));
+    const auto secondParsed = parseRtcpSenderReport(buildRtcpSenderReport(second));
+
+    ASSERT_TRUE(firstParsed.has_value());
+    ASSERT_TRUE(secondParsed.has_value());
+    EXPECT_EQ(firstParsed->packetCount, 30U);
+    EXPECT_EQ(firstParsed->octetCount, 40U);
+    EXPECT_EQ(secondParsed->packetCount, 300U);
+    EXPECT_EQ(secondParsed->octetCount, 400U);
+
+    // The shared timing fields are untouched by the per-channel counters
+    EXPECT_EQ(firstParsed->ntpTimestamp, secondParsed->ntpTimestamp);
+    EXPECT_EQ(firstParsed->rtpTimestamp, secondParsed->rtpTimestamp);
+}
+
 // ---- What the encoder refuses to put on the wire ---------------------------
 
 TEST(RtcpPacket, EncoderRejectsWhatCannotBeSent) {
