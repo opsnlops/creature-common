@@ -4,10 +4,24 @@
 #include <avahi-common/error.h>
 #include <avahi-common/malloc.h>
 #include <avahi-common/strlst.h>
+#include <avahi-common/timeval.h>
 
 #include "creature/network/AvahiPublisher.h"
+#include "creature/thread/ThreadName.h"
 
 namespace creatures::network {
+
+namespace {
+
+// Avahi starts its poll thread without naming it, so it inherits the name of
+// whichever thread started it, usually the host's main thread. Timeout
+// callbacks run on the poll thread, so one that fires immediately can name it.
+void nameThePollThread(AvahiTimeout *timeout, void *userdata) {
+    setThreadName(AVAHI_POLL_THREAD_NAME);
+    static_cast<const AvahiPoll *>(userdata)->timeout_free(timeout);
+}
+
+} // namespace
 
 AvahiPublisher::AvahiPublisher(std::shared_ptr<Logger> logger, MdnsService service)
     : logger(std::move(logger)), service(std::move(service)) {
@@ -74,6 +88,11 @@ bool AvahiPublisher::start() {
         poll = nullptr;
         return false;
     }
+
+    // Scheduled before the poll thread starts, so no lock is needed
+    const AvahiPoll *api = avahi_threaded_poll_get(poll);
+    timeval now{};
+    api->timeout_new(api, avahi_elapse_time(&now, 0, 0), nameThePollThread, const_cast<AvahiPoll *>(api));
 
     if (avahi_threaded_poll_start(poll) < 0) {
         logger->warn("mDNS: unable to start the Avahi poll thread; not advertising {}", currentName);

@@ -12,6 +12,9 @@
 
 namespace creatures::network {
 
+/** The name Avahi's poll thread gets, as it shows in htop and ps -T */
+inline constexpr const char *AVAHI_POLL_THREAD_NAME = "AvahiPublisher";
+
 /**
  * Build an Avahi TXT list that publishes the entries in the service's order
  *
