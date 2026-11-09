@@ -10,6 +10,7 @@ namespace creatures::timesync {
 
 // linuxptp management ids we read. TIME_STATUS_NP is a linuxptp extension.
 inline constexpr uint16_t PTP_MGMT_TIME_STATUS_NP = 0xC000;
+inline constexpr uint16_t PTP_MGMT_TIME_PROPERTIES_DATA_SET = 0x2003;
 inline constexpr uint16_t PTP_MGMT_PORT_DATA_SET = 0x2004;
 
 /**
@@ -49,5 +50,19 @@ std::optional<TimeStatus> decodeTimeStatus(const std::vector<uint8_t> &data);
  * The port state from a PORT_DATA_SET, such as SLAVE or LISTENING
  */
 std::optional<std::string> decodePortState(const std::vector<uint8_t> &data);
+
+/**
+ * What TIME_PROPERTIES_DATA_SET says about converting PTP time to UTC
+ *
+ * A PTP clock runs on TAI. Anything comparing it against CLOCK_REALTIME needs
+ * this offset, and needs to know whether the grandmaster will vouch for it.
+ */
+struct TimeProperties {
+    int16_t currentUtcOffsetSeconds = 0;
+    bool currentUtcOffsetValid = false;
+    bool ptpTimescale = false; ///< Set when the clock really is on TAI rather than arbitrary
+};
+
+std::optional<TimeProperties> decodeTimeProperties(const std::vector<uint8_t> &data);
 
 } // namespace creatures::timesync

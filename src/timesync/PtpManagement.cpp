@@ -112,6 +112,19 @@ std::optional<TimeStatus> decodeTimeStatus(const std::vector<uint8_t> &data) {
     return status;
 }
 
+std::optional<TimeProperties> decodeTimeProperties(const std::vector<uint8_t> &data) {
+    // currentUtcOffset(2) flags(1) timeSource(1)
+    if (data.size() < 4) {
+        return std::nullopt;
+    }
+    TimeProperties properties;
+    properties.currentUtcOffsetSeconds = static_cast<int16_t>(get16(data.data()));
+    const uint8_t flags = data[2];
+    properties.currentUtcOffsetValid = (flags & 0x04U) != 0; // bit 2
+    properties.ptpTimescale = (flags & 0x08U) != 0;          // bit 3
+    return properties;
+}
+
 std::optional<std::string> decodePortState(const std::vector<uint8_t> &data) {
     // portIdentity(10) portState(1) ...
     if (data.size() < 11) {
