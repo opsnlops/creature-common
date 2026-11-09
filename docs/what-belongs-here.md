@@ -22,7 +22,7 @@ Everything below is ranked by that test, not by line count.
 Small code, highest consequence. Both sides already agree on these values; the
 problem is that nothing *makes* them agree.
 
-### RTP/RTCP protocol constants
+### RTP/RTCP protocol constants — [#1](https://github.com/opsnlops/creature-common/issues/1)
 
 Defined independently in `controller/src/audio/audio-config.h` and
 `server/src/server/config.h`:
@@ -49,7 +49,7 @@ lines.
 **Keep local:** buffer sizes, jitter targets, playout delays, bitrates. Those are
 tuning, not contract, and the two sides legitimately differ.
 
-### RTCP Sender Report encode/decode
+### RTCP Sender Report encode/decode — [#2](https://github.com/opsnlops/creature-common/issues/2)
 
 The server builds SRs (`rtp/RtcpPacket.h`, `buildRtcpSenderReport` over
 `RtcpSenderReportData`) and the controller parses them (`audio/RtcpPacket.h`,
@@ -74,7 +74,7 @@ than using uvgRTP's RTCP.
 
 ## Tier 2 — a capability the server is missing
 
-### creature_timesync
+### creature_timesync — [#3](https://github.com/opsnlops/creature-common/issues/3)
 
 ~550 lines: `TimeSync`, `TimeSyncMonitor`/`TimeSyncWatcher`, `PtpManagement`.
 Reads `ptp4l` over its read-only UDS (`/var/run/ptp4lro`) and the kernel clock via
@@ -98,7 +98,7 @@ its own threshold.
 
 ## Tier 3 — cheap and safe
 
-### setThreadName
+### setThreadName — [#4](https://github.com/opsnlops/creature-common/issues/4)
 
 `controller/src/util/thread_name.cpp` and `server/src/util/threadName.cpp`. Same
 function, byte-identical `#if defined(__linux__)` / `__APPLE__` ladder, different
@@ -110,7 +110,7 @@ instead. Moving it fixes that once rather than twice.
 
 ## Tier 4 — the big one
 
-### The audio output sink
+### The audio output sink — [#5](https://github.com/opsnlops/creature-common/issues/5)
 
 `AudioOutput` + `AlsaAudioOutput` + `CoreAudioOutput` + `AlsaMixerControl` +
 `AudioOutputKeepalive`. This *is* a diverged fork, and the most expensive one:
@@ -185,12 +185,26 @@ decision rather than a move. A later phase.
 
 ## Not creature-common, but found on the way
 
-**`opsnlops/libe131` is pinned at different commits in the two repos** — server
-`78ab65a`, controller `c4eb1d7`, with an uncommitted local bump to `8fbf3f5` in
-the server worktree. Three states of the E1.31 library between the sender and the
-receiver. It is an external submodule so it does not belong here, but it is the
-same class of risk as the wire constants, and the fix is to pin both repos to one
-tag.
+**`opsnlops/libe131` is pinned three different ways** — tracked as
+[creature-server#257](https://github.com/opsnlops/creature-server/issues/257).
+Controller at `c4eb1d7`; server committed at `78ab65a`; server worktree
+uncommitted at `8fbf3f5`. The two server commits are *siblings*, so this is a
+fork in our own copy, not a lag.
+
+Worth stating the conclusion rather than the alarm: **the protocol has not
+drifted.** Ignoring whitespace, the only real differences are in
+`e131_dest_str()` and `e131_multicast_join_ifaddr()`, and **neither function is
+called anywhere in either repo** — the controller's one reference to the join
+function is commented out. Packet building and parsing are byte-identical across
+all three pins.
+
+What is worth fixing: the pending worktree bump would drop our own
+`sprintf` → `snprintf` hardening; both commits reformatted the whole file in
+opposite directions, so merging them conflicts across all 446 lines; and the
+server's `.gitmodules` points at `opsnlops/libe131` while the local checkout's
+`origin` is upstream `hhromic/libe131`, which is a plausible origin for the drift.
+External dependency, so not creature-common material — but the same class of risk
+as #1: two sides of one protocol kept in step by hand.
 
 ## Suggested order
 
