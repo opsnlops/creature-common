@@ -21,17 +21,31 @@ class TimeSyncMonitor {
      *        or empty to skip that reading. Clients have no reason to look;
      *        a grandmaster must, because the PHC is what the fleet follows.
      */
-    explicit TimeSyncMonitor(std::string ptp4lSocket = PTP4L_READ_ONLY_SOCKET, std::string phcDevice = {});
+    /**
+     * @param configuredTaiOffsetSeconds the TAI-UTC offset to assume when
+     *        neither ptp4l nor the kernel will supply one, or nothing to refuse
+     *        to assume and report the PHC offset as unavailable instead
+     */
+    explicit TimeSyncMonitor(std::string ptp4lSocket = PTP4L_READ_ONLY_SOCKET, std::string phcDevice = {},
+                             std::optional<int32_t> configuredTaiOffsetSeconds = DEFAULT_TAI_OFFSET_SECONDS);
 
     TimeSyncStatus check();
 
   private:
     PtpReading readPtp();
     ClockReading readClock();
-    PhcReading readPhc();
+
+    /**
+     * @param ptp the PTP reading, for the TAI-to-UTC offset. A PHC runs on TAI
+     *        and CLOCK_REALTIME on UTC, so without a trustworthy offset there
+     *        is no comparison to make — and reporting one anyway is how this
+     *        first shipped claiming 37 seconds of error on a healthy host.
+     */
+    PhcReading readPhc(const PtpReading &ptp);
 
     std::string ptp4lSocket;
     std::string phcDevice;
+    std::optional<int32_t> configuredTaiOffsetSeconds;
 #if defined(__linux__)
     // Only the Linux reader uses these, and -Wunused-private-field is on.
     uint16_t sequence = 0;

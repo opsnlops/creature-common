@@ -87,6 +87,46 @@ TEST(PtpManagement, UnknownPortStatesDecodeAsUnknown) {
     }
 }
 
+TEST(PtpManagement, DecodesTimePropertiesAsTheGrandmasterReportsThem) {
+    // The real mainstage grandmaster, via pmc: currentUtcOffset 37,
+    // currentUtcOffsetValid 0, ptpTimescale 1, timeSource 0xa0. dataField is
+    // currentUtcOffset(2) flags(1) timeSource(1).
+    const std::vector<uint8_t> data = {0x00, 0x25, 0x08, 0xa0};
+
+    const auto properties = decodeTimeProperties(data);
+
+    ASSERT_TRUE(properties.has_value());
+    EXPECT_EQ(properties->currentUtcOffsetSeconds, 37);
+    EXPECT_FALSE(properties->currentUtcOffsetValid) << "not traceable, so it will not vouch for it";
+    EXPECT_TRUE(properties->ptpTimescale) << "which is why the 37 matters at all";
+}
+
+TEST(PtpManagement, DecodesTimePropertiesWhenTheOffsetIsVouchedFor) {
+    // Same, with bit 2 also set: a host configured to assert validity.
+    const std::vector<uint8_t> data = {0x00, 0x25, 0x0c, 0xa0};
+
+    const auto properties = decodeTimeProperties(data);
+
+    ASSERT_TRUE(properties.has_value());
+    EXPECT_EQ(properties->currentUtcOffsetSeconds, 37);
+    EXPECT_TRUE(properties->currentUtcOffsetValid);
+    EXPECT_TRUE(properties->ptpTimescale);
+}
+
+TEST(PtpManagement, DecodesANegativeUtcOffset) {
+    // Int16, so signed. It was positive for every year this code will see, but
+    // reading it unsigned would be a bug waiting for a different planet.
+    const std::vector<uint8_t> data = {0xff, 0xff, 0x0c, 0xa0};
+    const auto properties = decodeTimeProperties(data);
+    ASSERT_TRUE(properties.has_value());
+    EXPECT_EQ(properties->currentUtcOffsetSeconds, -1);
+}
+
+TEST(PtpManagement, RejectsAShortTimePropertiesDataField) {
+    EXPECT_FALSE(decodeTimeProperties({}).has_value());
+    EXPECT_FALSE(decodeTimeProperties({0x00, 0x25, 0x0c}).has_value());
+}
+
 TEST(PtpManagement, RejectsRequestsAndTruncatedMessages) {
     const auto request = fromHex(TIME_STATUS_REQUEST);
     EXPECT_FALSE(decodeManagementResponse(request.data(), request.size()).has_value());

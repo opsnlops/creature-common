@@ -25,12 +25,17 @@ constexpr auto CHECK_INTERVAL = std::chrono::seconds(5);
 constexpr auto REMINDER_INTERVAL = std::chrono::seconds(60);
 } // namespace
 
-TimeSyncMonitor::TimeSyncMonitor(std::string ptp4lSocket, std::string phcDevice)
-    : ptp4lSocket(std::move(ptp4lSocket)), phcDevice(std::move(phcDevice)) {}
+TimeSyncMonitor::TimeSyncMonitor(std::string ptp4lSocket, std::string phcDevice,
+                                 std::optional<int32_t> configuredTaiOffsetSeconds)
+    : ptp4lSocket(std::move(ptp4lSocket)), phcDevice(std::move(phcDevice)),
+      configuredTaiOffsetSeconds(configuredTaiOffsetSeconds) {}
 
 #if defined(__linux__)
 
-TimeSyncStatus TimeSyncMonitor::check() { return evaluateTimeSync(readPtp(), readClock(), readPhc()); }
+TimeSyncStatus TimeSyncMonitor::check() {
+    const auto ptp = readPtp();
+    return evaluateTimeSync(ptp, readClock(), readPhc(ptp));
+}
 
 PtpReading TimeSyncMonitor::readPtp() {
     PtpReading reading;
@@ -64,7 +69,10 @@ PtpReading TimeSyncMonitor::readPtp() {
 
     bool haveTime = false;
     bool havePort = false;
-    for (const uint16_t id : {PTP_MGMT_TIME_STATUS_NP, PTP_MGMT_PORT_DATA_SET}) {
+    // TIME_PROPERTIES rides along on the socket we already have open. Its
+    // absence is not fatal — only the PHC comparison needs it, and that
+    // reports its own unavailability.
+    for (const uint16_t id : {PTP_MGMT_TIME_STATUS_NP, PTP_MGMT_PORT_DATA_SET, PTP_MGMT_TIME_PROPERTIES_DATA_SET}) {
         const auto request = encodeManagementGet(id, sequence++, static_cast<uint64_t>(getpid()));
         if (sendto(fd, request.data(), request.size(), 0, reinterpret_cast<sockaddr *>(&remote), sizeof(remote)) < 0) {
             reading.error = fmt::format("{}: {}", ptp4lSocket, strerror(errno));
@@ -96,6 +104,11 @@ PtpReading TimeSyncMonitor::readPtp() {
                 reading.portState = *state;
                 havePort = true;
             }
+        } else if (response->managementId == PTP_MGMT_TIME_PROPERTIES_DATA_SET) {
+            if (const auto properties = decodeTimeProperties(response->data)) {
+                reading.utcOffsetSeconds = properties->currentUtcOffsetSeconds;
+                reading.utcOffsetValid = properties->currentUtcOffsetValid;
+            }
         }
     }
     close(fd);
@@ -120,10 +133,26 @@ ClockReading TimeSyncMonitor::readClock() {
     return reading;
 }
 
-PhcReading TimeSyncMonitor::readPhc() {
+PhcReading TimeSyncMonitor::readPhc(const PtpReading &ptp) {
     PhcReading reading;
     if (phcDevice.empty()) {
         return reading; // Not asked to look
+    }
+
+    // A PHC runs on TAI and CLOCK_REALTIME on UTC, so the comparison is
+    // meaningless without the offset between them. Two sources, and neither is
+    // guaranteed: ptp4l announces one but only vouches for it when configured
+    // with utc_offset, and the kernel's value is only set by chrony or ntpd --
+    // systemd-timesyncd leaves it at zero. If neither will say, say nothing
+    // rather than publish a number that is wrong by the whole offset.
+    timex taiStatus{};
+    taiStatus.modes = 0; // Read only
+    const int32_t kernelTai = adjtimex(&taiStatus) != -1 ? static_cast<int32_t>(taiStatus.tai) : 0;
+    const auto tai = resolveTaiOffset(ptp, kernelTai, configuredTaiOffsetSeconds);
+    if (!tai.seconds) {
+        reading.error = "no TAI-UTC offset to compare with: ptp4l will not vouch for one, the kernel's is unset, and "
+                        "none is configured";
+        return reading;
     }
 
     const int fd = open(phcDevice.c_str(), O_RDONLY | O_CLOEXEC);
@@ -157,7 +186,9 @@ PhcReading TimeSyncMonitor::readPhc() {
     const int64_t realtime = (nanos(before) + nanos(after)) / 2;
 
     reading.available = true;
-    reading.offsetNs = nanos(phc) - realtime;
+    reading.taiOffsetSeconds = *tai.seconds;
+    reading.taiOffsetSource = tai.source;
+    reading.offsetNs = nanos(phc) - realtime - static_cast<int64_t>(*tai.seconds) * 1'000'000'000LL;
     return reading;
 }
 
@@ -166,7 +197,7 @@ PhcReading TimeSyncMonitor::readPhc() {
 TimeSyncStatus TimeSyncMonitor::check() { return unknownTimeSync("PTP sync is only checked on Linux"); }
 PtpReading TimeSyncMonitor::readPtp() { return {}; }
 ClockReading TimeSyncMonitor::readClock() { return {}; }
-PhcReading TimeSyncMonitor::readPhc() { return {}; }
+PhcReading TimeSyncMonitor::readPhc(const PtpReading &) { return {}; }
 
 #endif
 
