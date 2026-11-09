@@ -60,7 +60,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     find_package(PkgConfig REQUIRED)
     pkg_check_modules(AVAHI_CLIENT REQUIRED IMPORTED_TARGET avahi-client)
     target_sources(creature_mdns PRIVATE src/network/AvahiPublisher.cpp)
-    target_link_libraries(creature_mdns PUBLIC PkgConfig::AVAHI_CLIENT)
+    target_link_libraries(creature_mdns PUBLIC PkgConfig::AVAHI_CLIENT PRIVATE creature::thread)
     target_compile_definitions(creature_mdns PUBLIC CREATURE_HAS_AVAHI=1)
 endif()
 
@@ -120,6 +120,10 @@ if(CREATURE_COMMON_BUILD_TESTS)
             tests/timesync/TimeSync_test.cpp
     )
     target_link_libraries(creature-common-test PRIVATE creature::mdns creature::rtp creature::thread creature::timesync gtest_main gmock)
+    # Needs Avahi, so only on Linux, like the publisher itself
+    if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        target_sources(creature-common-test PRIVATE tests/network/AvahiPublisher_test.cpp)
+    endif()
     target_compile_options(creature-common-test PRIVATE ${CREATURE_COMMON_WARNINGS})
 
     include(GoogleTest)
