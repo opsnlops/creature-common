@@ -64,6 +64,20 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
     target_compile_definitions(creature_mdns PUBLIC CREATURE_HAS_AVAHI=1)
 endif()
 
+# ---- creature::rtp -----------------------------------------------------------
+# The RTP/RTCP wire contract: the constants both sides must agree on, and one
+# encode/decode pair for the RTCP Sender Report. The sender used to own the
+# encoder and the receivers the decoder, with no shared definition of the format
+# between them (#1, #2).
+add_library(creature_rtp STATIC
+        src/rtp/Protocol.cpp
+        src/rtp/RtcpPacket.cpp
+)
+add_library(creature::rtp ALIAS creature_rtp)
+target_include_directories(creature_rtp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(creature_rtp PUBLIC fmt::fmt)
+target_compile_options(creature_rtp PRIVATE ${CREATURE_COMMON_WARNINGS})
+
 if(CREATURE_COMMON_BUILD_TESTS)
     include(CTest)
     include(FetchContent)
@@ -73,8 +87,12 @@ if(CREATURE_COMMON_BUILD_TESTS)
     )
     FetchContent_MakeAvailable(googletest)
 
-    add_executable(creature-common-test tests/network/MdnsService_test.cpp)
-    target_link_libraries(creature-common-test PRIVATE creature::mdns gtest_main gmock)
+    add_executable(creature-common-test
+            tests/network/MdnsService_test.cpp
+            tests/rtp/Protocol_test.cpp
+            tests/rtp/RtcpPacket_test.cpp
+    )
+    target_link_libraries(creature-common-test PRIVATE creature::mdns creature::rtp gtest_main gmock)
     target_compile_options(creature-common-test PRIVATE ${CREATURE_COMMON_WARNINGS})
 
     include(GoogleTest)
