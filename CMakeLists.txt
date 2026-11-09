@@ -78,6 +78,16 @@ target_include_directories(creature_rtp PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/inclu
 target_link_libraries(creature_rtp PUBLIC fmt::fmt)
 target_compile_options(creature_rtp PRIVATE ${CREATURE_COMMON_WARNINGS})
 
+# ---- creature::thread --------------------------------------------------------
+# Naming threads so they show up in htop and Instruments. Both consumers carried
+# the same copy, with the same broken #elif (#4).
+find_package(Threads REQUIRED)
+add_library(creature_thread STATIC src/thread/ThreadName.cpp)
+add_library(creature::thread ALIAS creature_thread)
+target_include_directories(creature_thread PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}/include)
+target_link_libraries(creature_thread PUBLIC Threads::Threads)
+target_compile_options(creature_thread PRIVATE ${CREATURE_COMMON_WARNINGS})
+
 if(CREATURE_COMMON_BUILD_TESTS)
     include(CTest)
     include(FetchContent)
@@ -91,8 +101,9 @@ if(CREATURE_COMMON_BUILD_TESTS)
             tests/network/MdnsService_test.cpp
             tests/rtp/Protocol_test.cpp
             tests/rtp/RtcpPacket_test.cpp
+            tests/thread/ThreadName_test.cpp
     )
-    target_link_libraries(creature-common-test PRIVATE creature::mdns creature::rtp gtest_main gmock)
+    target_link_libraries(creature-common-test PRIVATE creature::mdns creature::rtp creature::thread gtest_main gmock)
     target_compile_options(creature-common-test PRIVATE ${CREATURE_COMMON_WARNINGS})
 
     include(GoogleTest)

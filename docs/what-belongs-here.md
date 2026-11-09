@@ -108,6 +108,11 @@ Both copies carry the same bug: `#elif` with no condition before the `#warning`,
 so the intended "I don't know this platform" warning would be a hard error
 instead. Moving it fixes that once rather than twice.
 
+Found on the way in: Linux rejects thread names over 15 bytes, so most of the
+long names in both repos (`creatures::server::ServerConnection`,
+`creatures::tasks::PingTask`, `uWebSockets::broadcast`, ...) were never applied
+on the hosts that matter. The shared version shortens names to fit instead.
+
 ## Tier 4 — the big one
 
 ### The audio output sink — [#5](https://github.com/opsnlops/creature-common/issues/5)
