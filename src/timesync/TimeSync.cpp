@@ -57,6 +57,10 @@ ResolvedTaiOffset resolveTaiOffset(const PtpReading &ptp, const int32_t kernelTa
     return {};
 }
 
+bool isGrandmaster(const PtpReading &ptp) {
+    return ptp.available && (ptp.portState == "MASTER" || ptp.portState == "GRAND_MASTER");
+}
+
 bool phcDisciplined(const PhcReading &phc) {
     // An unavailable reading is not a failure: a client has no reason to look.
     return !phc.available || std::llabs(phc.offsetNs) <= PHC_MAX_OFFSET_NS;
@@ -69,17 +73,15 @@ TimeSyncStatus evaluateTimeSync(const PtpReading &ptp, const ClockReading &clock
     status.phc = phc;
     status.state = SyncState::Unsynced;
 
-    // linuxptp sends MASTER; GRAND_MASTER is its internal state, accepted in case
-    // it ever reaches the wire (see portStateName).
-    const bool isGrandmaster = ptp.available && (ptp.portState == "MASTER" || ptp.portState == "GRAND_MASTER");
+    const bool grandmaster = isGrandmaster(ptp);
 
     if (!ptp.available) {
         status.reason = fmt::format("ptp4l isn't answering: {}", ptp.error);
-    } else if (ptp.portState != "SLAVE" && !isGrandmaster) {
+    } else if (ptp.portState != "SLAVE" && !grandmaster) {
         status.reason = fmt::format("the PTP port is {}, not following a grandmaster", ptp.portState);
-    } else if (!isGrandmaster && !ptp.gmPresent) {
+    } else if (!grandmaster && !ptp.gmPresent) {
         status.reason = "ptp4l can't see a grandmaster";
-    } else if (!isGrandmaster && std::llabs(ptp.offsetNs) > PTP_MAX_OFFSET_NS) {
+    } else if (!grandmaster && std::llabs(ptp.offsetNs) > PTP_MAX_OFFSET_NS) {
         status.reason = fmt::format("the PTP clock is {} ns from the grandmaster, more than {} ns", ptp.offsetNs,
                                     PTP_MAX_OFFSET_NS);
         // Reported but not gated on for a grandmaster, because these answer a
@@ -99,11 +101,11 @@ TimeSyncStatus evaluateTimeSync(const PtpReading &ptp, const ClockReading &clock
         // answering, the port in MASTER, and phc2sys holding the PHC. Absolute
         // correctness of CLOCK_REALTIME does not affect the creatures anyway —
         // the whole chain being equally wrong keeps them in step with each other.
-    } else if (!isGrandmaster && !clock.available) {
+    } else if (!grandmaster && !clock.available) {
         status.reason = "unable to read the kernel's clock status";
-    } else if (!isGrandmaster && !clock.synced) {
+    } else if (!grandmaster && !clock.synced) {
         status.reason = fmt::format("the system clock isn't synchronized, so phc2sys may not be running");
-    } else if (!isGrandmaster && clock.maxErrorUs > CLOCK_MAX_ERROR_US) {
+    } else if (!grandmaster && clock.maxErrorUs > CLOCK_MAX_ERROR_US) {
         status.reason = fmt::format(
             "the system clock hasn't been disciplined recently (max error {} ms), so phc2sys may not be running",
             clock.maxErrorUs / 1000);
@@ -116,7 +118,7 @@ TimeSyncStatus evaluateTimeSync(const PtpReading &ptp, const ClockReading &clock
                         phc.offsetNs, PHC_MAX_OFFSET_NS);
     } else {
         status.state = SyncState::Synced;
-        if (isGrandmaster) {
+        if (grandmaster) {
             if (phc.available) {
                 status.reason = fmt::format("this host is the PTP grandmaster, serving the PHC at {} ns", phc.offsetNs);
             } else if (!phc.error.empty()) {
@@ -148,7 +150,13 @@ void appendTimeSyncTxt(std::vector<std::pair<std::string, std::string>> &txt, co
         txt.emplace_back("ptp_port", status.ptp.portState);
         txt.emplace_back("ptp_gm", status.ptp.gmIdentity);
     }
-    if (status.clock.available) {
+    // clock_synced is a verdict from clockDisciplined(), which is calibrated for
+    // a client: there phc2sys disciplines CLOCK_REALTIME and the kernel's PLL
+    // keeps maxerror tight. A grandmaster gets CLOCK_REALTIME from NTP, so that
+    // predicate has no meaning there -- and publishing its answer anyway read as
+    // "clock_synced=no" on a host whose time was perfectly good, which is worse
+    // than publishing nothing. Its real health is ptp_port and phc_offset_ns.
+    if (status.clock.available && !isGrandmaster(status.ptp)) {
         txt.emplace_back("clock_synced", clockDisciplined(status.clock) ? "yes" : "no");
     }
     if (status.phc.available) {
