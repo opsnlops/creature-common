@@ -25,9 +25,25 @@ inline constexpr long CLOCK_MAX_ERROR_US = 10'000;
 inline constexpr const char *DEFAULT_PHC_DEVICE = "/dev/ptp0";
 
 // How far CLOCK_REALTIME and the PHC may drift apart before phc2sys is suspect.
-// Generous next to PTP_MAX_OFFSET_NS: this is a software servo over a syscall
-// pair, not hardware timestamping, and the read itself costs a microsecond or so.
-inline constexpr int64_t PHC_MAX_OFFSET_NS = 1'000'000;
+//
+// 50 us, chosen from measurement rather than reasoning. With phc2sys stopped on
+// the mainstage server the PHC drifts at 31.5 ns/s -- 0.032 ppm, a far better
+// oscillator than the 1-10 ppm this was first guessed against. The original
+// 1 ms would therefore have taken 8.8 hours to trip, so a dead phc2sys went
+// unreported for most of a day. 50 us trips in about 26 minutes, with roughly
+// ten times the headroom over the offsets a healthy host shows (tens to a few
+// thousand nanoseconds).
+//
+// Still generous next to PTP_MAX_OFFSET_NS, because this is a software servo
+// observed through a syscall pair rather than hardware timestamping.
+//
+// Note this threshold answers "has phc2sys stopped?" and not "is the error
+// audible?". At that drift rate the creatures stay in step with each other
+// regardless -- they all follow the same PHC -- and the error that accumulates
+// is between audio playout and servo motion. Reaching a marginal 10 ms of that
+// takes 87 hours, so detection is not the binding constraint; noticing the
+// fault is.
+inline constexpr int64_t PHC_MAX_OFFSET_NS = 50'000;
 
 /**
  * The TAI-UTC offset to assume when nothing authoritative will say
@@ -155,6 +171,14 @@ bool clockDisciplined(const ClockReading &clock);
  */
 [[nodiscard]] ResolvedTaiOffset resolveTaiOffset(const PtpReading &ptp, int32_t kernelTaiSeconds,
                                                  std::optional<int32_t> configuredSeconds);
+
+/**
+ * Is this host the grandmaster rather than a client?
+ *
+ * linuxptp sends MASTER; GRAND_MASTER is its internal state, accepted in case
+ * it ever reaches the wire (see portStateName).
+ */
+[[nodiscard]] bool isGrandmaster(const PtpReading &ptp);
 
 /**
  * Is phc2sys holding the PHC to CLOCK_REALTIME?

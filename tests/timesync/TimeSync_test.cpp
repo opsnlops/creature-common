@@ -11,6 +11,7 @@ namespace {
 
 using ::testing::Contains;
 using ::testing::HasSubstr;
+using ::testing::Key;
 using ::testing::Pair;
 
 PtpReading lockedPtp() {
@@ -263,6 +264,50 @@ TEST(TimeSync, TxtRecordsSayWhereTheTaiCorrectionCameFrom) {
     appendTimeSyncTxt(txt, evaluateTimeSync(grandmasterPtp(), syncedClock(), phc));
 
     EXPECT_THAT(txt, Contains(Pair("phc_tai_src", "assumed")));
+}
+
+TEST(TimeSync, AGrandmasterDoesNotPublishAClientsClockVerdict) {
+    // clock_synced comes from clockDisciplined(), which is calibrated for a
+    // client. On a grandmaster it answers nothing, and publishing "no" on a
+    // host whose time is fine was actively misleading.
+    ClockReading undisciplined;
+    undisciplined.available = true;
+    undisciplined.synced = false;
+
+    std::vector<std::pair<std::string, std::string>> txt;
+    appendTimeSyncTxt(txt, evaluateTimeSync(grandmasterPtp(), undisciplined, heldPhc()));
+
+    EXPECT_THAT(txt, ::testing::Not(Contains(Key("clock_synced"))));
+    // Its real health still is published.
+    EXPECT_THAT(txt, Contains(Pair("ptp_port", "MASTER")));
+    EXPECT_THAT(txt, Contains(Key("phc_offset_ns")));
+}
+
+TEST(TimeSync, AClientStillPublishesItsClockVerdict) {
+    std::vector<std::pair<std::string, std::string>> txt;
+    appendTimeSyncTxt(txt, evaluateTimeSync(lockedPtp(), syncedClock()));
+    EXPECT_THAT(txt, Contains(Pair("clock_synced", "yes")));
+}
+
+TEST(TimeSync, TheGrandmasterPredicateAcceptsBothMasterStates) {
+    auto ptp = grandmasterPtp();
+    EXPECT_TRUE(isGrandmaster(ptp));
+    ptp.portState = "GRAND_MASTER";
+    EXPECT_TRUE(isGrandmaster(ptp));
+    ptp.portState = "SLAVE";
+    EXPECT_FALSE(isGrandmaster(ptp));
+    ptp.available = false;
+    ptp.portState = "MASTER";
+    EXPECT_FALSE(isGrandmaster(ptp)) << "an unavailable reading asserts nothing";
+}
+
+TEST(TimeSync, ThePhcThresholdCatchesAStoppedPhc2sysInMinutesNotHours) {
+    // Measured on the mainstage server: 31.5 ns/s with phc2sys stopped. The
+    // threshold exists to notice the fault, so the time to trip matters.
+    constexpr double driftNsPerSecond = 31.5;
+    const double minutesToTrip = (static_cast<double>(PHC_MAX_OFFSET_NS) / driftNsPerSecond) / 60.0;
+    EXPECT_LT(minutesToTrip, 60.0) << "a dead phc2sys should be noticed within the hour";
+    EXPECT_GT(PHC_MAX_OFFSET_NS, 10'000) << "but not so tight that a healthy host trips it";
 }
 
 TEST(TimeSync, PhcOffsetReachesTxtRecordsWhenRead) {
