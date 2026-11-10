@@ -16,7 +16,9 @@ inline constexpr const char *PTP4L_READ_ONLY_SOCKET = "/var/run/ptp4lro";
 inline constexpr int64_t PTP_MAX_OFFSET_NS = 50'000;
 
 // The kernel grows maxerror by 500 microseconds a second until something
-// disciplines the clock, so this catches phc2sys going quiet for about 20 seconds
+// disciplines the clock, so this catches phc2sys going quiet for about 20 seconds.
+// On a client phc2sys resets it every second while it runs: Beaky's stayed
+// between 0 and 500 us over 20,000 reads, with no NTP daemon running (2026-11-09).
 inline constexpr long CLOCK_MAX_ERROR_US = 10'000;
 
 // Where the PTP hardware clock lives. ptp4l is configured with phc_index -1, so
@@ -30,9 +32,21 @@ inline constexpr const char *DEFAULT_PHC_DEVICE = "/dev/ptp0";
 // the mainstage server the PHC drifts at 31.5 ns/s -- 0.032 ppm, a far better
 // oscillator than the 1-10 ppm this was first guessed against. The original
 // 1 ms would therefore have taken 8.8 hours to trip, so a dead phc2sys went
-// unreported for most of a day. 50 us trips in about 26 minutes, with roughly
-// ten times the headroom over the offsets a healthy host shows (tens to a few
-// thousand nanoseconds).
+// unreported for most of a day. 50 us trips in about 26 minutes.
+//
+// Why not tighter, to notice sooner: each check is a single read, and one noisy
+// read raises the alarm. Read noise, not drift, sets the floor, and the
+// grandmaster's read noise is unmeasured. There are only two healthy readings on
+// record, 54 ns and 3.2 us. 50 us is defensible against those two, with roughly
+// 15 times the headroom, but they are not a distribution. Sample the grandmaster
+// many times with readPhc()'s own method before tightening this.
+//
+// A Pi 5 is noisier, because its PHC sits on the RP1 behind PCIe. Beaky, 20,000
+// reads 1 ms apart with phc2sys healthy (2026-11-09): median +1.8 us, p99.9
+// 3.6 us, worst -9.6 and +11.3 us. Each PHC read took 5.7 us at the median and
+// up to 26 us. Clients don't run this check (see phcDisciplined()), but if one
+// ever does, those numbers apply: 50 us holds about 4 times their worst case,
+// and 10 us would be raised by read noise alone.
 //
 // Still generous next to PTP_MAX_OFFSET_NS, because this is a software servo
 // observed through a syscall pair rather than hardware timestamping.
@@ -185,6 +199,17 @@ bool clockDisciplined(const ClockReading &clock);
  *
  * Only meaningful where the host serves the PHC to others, which is why an
  * unavailable reading is not a failure: a client has no reason to look.
+ *
+ * phc2sys runs in opposite directions on the two roles, and each has its own
+ * detector. On a client phc2sys steers CLOCK_REALTIME from the PHC and resets
+ * the kernel's maxerror as it goes. If it stops, maxerror climbs and
+ * clockDisciplined() fails within about 20 seconds, much sooner than this check
+ * would. On a grandmaster phc2sys steers the PHC from CLOCK_REALTIME, which NTP
+ * disciplines, so maxerror says nothing about phc2sys. This check is the only
+ * one that notices there.
+ *
+ * Clients also can't easily look: /dev/ptp0 is root-only on the Pis, and the
+ * controller runs unprivileged.
  */
 bool phcDisciplined(const PhcReading &phc);
 
