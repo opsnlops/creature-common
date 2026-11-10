@@ -62,7 +62,8 @@ bool isGrandmaster(const PtpReading &ptp) {
 }
 
 bool phcDisciplined(const PhcReading &phc) {
-    // An unavailable reading is not a failure: a client has no reason to look.
+    // An unavailable reading is not a failure: a client has no reason to look,
+    // because clockDisciplined() already catches a stopped phc2sys there.
     return !phc.available || std::llabs(phc.offsetNs) <= PHC_MAX_OFFSET_NS;
 }
 

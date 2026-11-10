@@ -18,8 +18,10 @@ class TimeSyncMonitor {
     /**
      * @param ptp4lSocket ptp4l's read-only management socket
      * @param phcDevice the PTP hardware clock to compare against CLOCK_REALTIME,
-     *        or empty to skip that reading. Clients have no reason to look;
-     *        a grandmaster must, because the PHC is what the fleet follows.
+     *        or empty to skip that reading. Clients have no reason to look,
+     *        since their clock check already catches a stopped phc2sys; a
+     *        grandmaster must, because the PHC is what the fleet follows. See
+     *        phcDisciplined().
      */
     /**
      * @param configuredTaiOffsetSeconds the TAI-UTC offset to assume when
