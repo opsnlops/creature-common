@@ -16,7 +16,8 @@ inline constexpr const char *PTP4L_READ_ONLY_SOCKET = "/var/run/ptp4lro";
 inline constexpr int64_t PTP_MAX_OFFSET_NS = 50'000;
 
 // The kernel grows maxerror by 500 microseconds a second until something
-// disciplines the clock, so this catches phc2sys going quiet for about 20 seconds.
+// disciplines the clock (measured at 499 on the grandmaster, where nothing reset
+// it for ten minutes), so this catches phc2sys going quiet for about 20 seconds.
 // On a client phc2sys resets it every second while it runs: Beaky's stayed
 // between 0 and 500 us over 20,000 reads, with no NTP daemon running (2026-11-09).
 inline constexpr long CLOCK_MAX_ERROR_US = 10'000;
@@ -35,18 +36,23 @@ inline constexpr const char *DEFAULT_PHC_DEVICE = "/dev/ptp0";
 // unreported for most of a day. 50 us trips in about 26 minutes.
 //
 // Why not tighter, to notice sooner: each check is a single read, and one noisy
-// read raises the alarm. Read noise, not drift, sets the floor, and the
-// grandmaster's read noise is unmeasured. There are only two healthy readings on
-// record, 54 ns and 3.2 us. 50 us is defensible against those two, with roughly
-// 15 times the headroom, but they are not a distribution. Sample the grandmaster
-// many times with readPhc()'s own method before tightening this.
+// read raises the alarm. Read noise, not drift, sets the floor. The PHC is read
+// between two CLOCK_REALTIME reads, so a reading can be off by up to half the
+// time that bracket took.
 //
-// A Pi 5 is noisier, because its PHC sits on the RP1 behind PCIe. Beaky, 20,000
-// reads 1 ms apart with phc2sys healthy (2026-11-09): median +1.8 us, p99.9
-// 3.6 us, worst -9.6 and +11.3 us. Each PHC read took 5.7 us at the median and
-// up to 26 us. Clients don't run this check (see phcDisciplined()), but if one
-// ever does, those numbers apply: 50 us holds about 4 times their worst case,
-// and 10 us would be raised by read noise alone.
+// Measured on the grandmaster (I226) with phc2sys healthy, 20,000 reads 1 ms
+// apart and 600 reads 1 s apart over ten minutes (2026-11-09): offset median
+// +2.3 to +3.0 us, worst -6.4 us. The bracket took 6.7 to 8.5 us at the median
+// and up to 26.5 us, enough for one read to be 13 us off on its own. 50 us is
+// about 8 times the worst offset seen, and that worst read uses a quarter of it.
+// At 20 us it would use two thirds; at 10 us one slow read could raise the alarm
+// with phc2sys healthy.
+//
+// A Pi 5 measures much the same, so the cost is in reaching the PHC, not in the
+// host. Beaky (RP1 over PCIe), 20,000 reads 1 ms apart: median +1.8 us, p99.9
+// 3.6 us, worst -9.6 and +11.3 us, the bracket 5.7 us at the median and up to
+// 26 us. Clients don't run this check (see phcDisciplined()), but if one ever
+// does, 50 us holds there too.
 //
 // Still generous next to PTP_MAX_OFFSET_NS, because this is a software servo
 // observed through a syscall pair rather than hardware timestamping.
