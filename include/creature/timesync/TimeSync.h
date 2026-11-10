@@ -30,10 +30,20 @@ inline constexpr const char *DEFAULT_PHC_DEVICE = "/dev/ptp0";
 // How far CLOCK_REALTIME and the PHC may drift apart before phc2sys is suspect.
 //
 // 50 us, chosen from measurement rather than reasoning. With phc2sys stopped on
-// the mainstage server the PHC drifts at 31.5 ns/s -- 0.032 ppm, a far better
+// the mainstage server the PHC drifts at 102.6 ns/s -- 0.103 ppm, a far better
 // oscillator than the 1-10 ppm this was first guessed against. The original
-// 1 ms would therefore have taken 8.8 hours to trip, so a dead phc2sys went
-// unreported for most of a day. 50 us trips in about 26 minutes.
+// 1 ms would therefore have taken 2.7 hours to trip, so a dead phc2sys went
+// unreported for hours. 50 us trips in about 8 minutes.
+//
+// That drift rate is measured with phc2sys actually stopped (2026-11-10), which
+// until then it was not. It read 31.5 ns/s, taken from the read-noise runs
+// below -- and those ran with phc2sys healthy, so what they measured was the
+// servo's residual wander, not drift. The comment asserted "with phc2sys
+// stopped" of a test nobody had run, and the 26 minutes derived from it was out
+// by 3.3x. Stopping phc2sys-server.service tripped this check in 7 min 34 s
+// from +3.8 us, reporting 50,360 ns within about 3.5 s of the crossing;
+// restarting it pulled roughly 120 us back to +2.4 us in one correction. Every
+// conclusion here survived the test. Only the rates did not.
 //
 // Why not tighter, to notice sooner: each check is a single read, and one noisy
 // read raises the alarm. Read noise, not drift, sets the floor. The PHC is read
@@ -61,7 +71,7 @@ inline constexpr const char *DEFAULT_PHC_DEVICE = "/dev/ptp0";
 // audible?". At that drift rate the creatures stay in step with each other
 // regardless -- they all follow the same PHC -- and the error that accumulates
 // is between audio playout and servo motion. Reaching a marginal 10 ms of that
-// takes 87 hours, so detection is not the binding constraint; noticing the
+// takes 27 hours, so detection is not the binding constraint; noticing the
 // fault is.
 inline constexpr int64_t PHC_MAX_OFFSET_NS = 50'000;
 
