@@ -128,9 +128,11 @@ on the hosts that matter. The shared version shortens names to fit instead.
 
 **Planned in [audio-sink-plan.md](audio-sink-plan.md)**, and it is an *adoption*
 rather than the refactor described below. The controller's sink runs every day
-behind both the controller and the audio-router, so it moves here unchanged and
-the server adopts it; the server's travel mode is already stereo at 48 kHz, so
-nothing has to be generalised to fit it. The 8-channel cap is HDMI's LPCM maximum
+behind both the controller and the audio-router, so it is **copied** here
+unchanged, the server adopts it first, and the controller may switch later — that
+switch is optional and last, because steps that touch the controller risk the
+birds for no gain to them. The server's travel mode is already stereo at 48 kHz,
+so nothing has to be generalised to fit it. The 8-channel cap is HDMI's LPCM maximum
 for the AVR the router feeds, and 48 kHz is the only rate the router opens —
 both describe the hardware and stay. The server's wider config knobs get narrowed
 to match instead.

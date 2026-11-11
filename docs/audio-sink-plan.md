@@ -211,11 +211,21 @@ setting silently stops being applied — on both consumers.
    and a gate that fails on day one gets loosened on the spot, which is the one
    thing it exists to prevent. The allowed differences are exactly:
 
-   - include lines
+   - **each include line, listed before → after, per file.** "Include lines" is
+     still an open category and must not stay one: an *added* include passes a
+     category-level gate and can change behaviour through a macro or an
+     overload. The list is filled in at step 1 from the controller's files at the
+     pinned commit — this document does not invent it, because the person doing
+     the move should read it off the real files rather than trust a transcription.
    - `AudioConfig` → `AudioOutputConfig` at `AudioOutput.h:18`,
      `AlsaAudioOutput.cpp:85` and `CoreAudioOutput.cpp:112` — the `open()`
      signature, three sites
    - nothing else
+
+   **Every line number in this section is anchored to controller `a102c79`.**
+   They will drift as the controller changes, and the step-4 run needs to know
+   what they referred to. Re-anchor and re-record them if step 1 happens against
+   a later commit.
 
    **The namespace stays `creatures::audio`.** Changing it would add diff lines
    and force call-site edits in both consumers.
@@ -256,6 +266,13 @@ move. That put the birds at risk before anything had been learned.
    depends on it. The bar to clear: travel mode used for real playback, with zero
    underruns. "A while" is not an exit criterion and neither session should be
    the one declaring it met.
+
+   **A soak only counts for the code that soaked.** The step-1 gate — including
+   the check that the constant values match the controller's — must pass *before*
+   the soak starts. Otherwise the server is soaking a different sink from the one
+   the creatures run, and the result says nothing about step 4. Any change to the
+   shared sink during the soak restarts it for step 4's purposes, and falls under
+   the ownership rule.
 4. **The controller switches — optional, last, and gated.** Only after the diff
    gate and the build-time guard are in place, with hardware checks on a bird and
    on the router, and with April's go-ahead. **If this step never happens, the
@@ -283,6 +300,28 @@ move. That put the birds at risk before anything had been learned.
    them, and it caught the omission itself on re-review. Recorded because a
    silently different default is exactly the class of thing this gate exists to
    catch, and the list being nearly right is how it would have got through.
+
+   **A seventh shared definition: `SpeakerChannel`.** Same problem as the
+   constants — at step 4 the controller deletes its `enum class SpeakerChannel`,
+   and the gate confirms the shared enum has the same enumerators *in the same
+   order*. `speakerChannelName` and `parseSpeakerChannel` stay in the
+   controller's `AudioConfig.cpp`.
+
+   **And the split's own silent failure, which is the worst thing in this plan.**
+   When the controller's `AudioConfig` derives from `AudioOutputConfig`, its own
+   seven sink fields must be **deleted**, not merely joined by a base class. If
+   they stay, *it compiles*: a derived member legally hides a base member, and
+   `-Wshadow` does not flag it. `Configuration` and `CommandLine` would then write
+   the derived `channels`, `deviceName` and `commonPlayoutDelayMs`, while
+   `open(const AudioOutputConfig &)` reads the base's **defaults** — Mono, the
+   default device, a 20 ms buffer. A creature that plays and sounds wrong, with
+   every existing test green, because the engine test runs against a fake output.
+
+   So the handover requires both: delete the seven fields, **and** add a
+   controller unit test that sets each field through `AudioConfig` and reads it
+   back through `const AudioOutputConfig &`. That test fails if any field is
+   hidden, and it is the only thing in this plan that would catch this
+   automatically.
 
 Hardware verification gates each consumer's own release. It is not a final step
 after everything is wired together.
@@ -365,7 +404,13 @@ above, along with its four additions — the soak's owner and exit criterion, th
 guard's precise scope, creature-common's `libasound2-dev` dependency, and its
 answers to both open questions.
 
-**It has not reviewed since round two's fixes.** Until it does, the controller
+**Round three** (declined, four narrow fixes): the `AudioConfig` split's member
+hiding, which compiles and misconfigures the device silently; `SpeakerChannel`
+missing from the step-4 handover; "include lines" left as an open category in the
+gate, with its line numbers unanchored; and the soak counting only for code that
+passed the step-1 gate first. All four are above.
+
+**It has not verified since round three's fixes.** Until it does, the controller
 side of this plan is provisional.
 
 And when it does sign off, that is **sign-off on the plan, not on step 4**, which
