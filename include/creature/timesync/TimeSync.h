@@ -30,20 +30,35 @@ inline constexpr const char *DEFAULT_PHC_DEVICE = "/dev/ptp0";
 // How far CLOCK_REALTIME and the PHC may drift apart before phc2sys is suspect.
 //
 // 50 us, chosen from measurement rather than reasoning. With phc2sys stopped on
-// the mainstage server the PHC drifts at 102.6 ns/s -- 0.103 ppm, a far better
-// oscillator than the 1-10 ppm this was first guessed against. The original
-// 1 ms would therefore have taken 2.7 hours to trip, so a dead phc2sys went
-// unreported for hours. 50 us trips in about 8 minutes.
+// the mainstage server the PHC pulls away from CLOCK_REALTIME at somewhere
+// between 100 and 330 ns/s (0.1-0.33 ppm), and 50 us trips in roughly 2.5 to 8
+// minutes. The original 1 ms would have taken 50 minutes to 2.7 hours, so a dead
+// phc2sys went unreported for most of a working session.
 //
-// That drift rate is measured with phc2sys actually stopped (2026-11-10), which
-// until then it was not. It read 31.5 ns/s, taken from the read-noise runs
-// below -- and those ran with phc2sys healthy, so what they measured was the
-// servo's residual wander, not drift. The comment asserted "with phc2sys
-// stopped" of a test nobody had run, and the 26 minutes derived from it was out
-// by 3.3x. Stopping phc2sys-server.service tripped this check in 7 min 34 s
-// from +3.8 us, reporting 50,360 ns within about 3.5 s of the crossing;
-// restarting it pulled roughly 120 us back to +2.4 us in one correction. Every
-// conclusion here survived the test. Only the rates did not.
+// Those are ranges on purpose. This is not one clock's drift and it has no
+// single value: it is the difference between a free-running PHC and
+// CLOCK_REALTIME, which systemd-timesyncd steps and slews on its own poll
+// schedule -- two moving clocks, so the rate you measure depends on the window
+// you measure it over. Four attempts, each honest, each different:
+//
+//   31.5 ns/s   read-noise runs, phc2sys HEALTHY (2026-11-09) -- not drift at
+//               all, but the servo's residual wander. Mislabelled.
+//   102.6 ns/s  stop-to-trip, 454 s window (2026-11-10)
+//   ~222 ns/s   stop-to-trip, 227 s window (2026-11-10, later)
+//   308.1 ns/s  direct sampling of /api/v1/metric/counters, seven readings over
+//               120 s, per-interval 279 to 331 ns/s (2026-11-10, later still)
+//
+// The last is the only one that watched the number move rather than inferring a
+// rate from two endpoints, and even it varied by 19% across two minutes. So do
+// not replace this range with whatever you measure next: a point value here has
+// now been wrong three times, and the fourth would be wrong too.
+//
+// What is settled, by watching it twice: the check fires. Stopping
+// phc2sys-server.service tripped it at 50,360 ns and again at 51,606 ns, each
+// within seconds of the crossing. Recovery is a single correction -- 140 us back
+// to 3.6 us inside one 10-second sample, with the sync state following in the
+// same reading. The threshold and every conclusion below survived all of it.
+// Only the rates did not, repeatedly.
 //
 // Why not tighter, to notice sooner: each check is a single read, and one noisy
 // read raises the alarm. Read noise, not drift, sets the floor. The PHC is read
@@ -68,11 +83,12 @@ inline constexpr const char *DEFAULT_PHC_DEVICE = "/dev/ptp0";
 // observed through a syscall pair rather than hardware timestamping.
 //
 // Note this threshold answers "has phc2sys stopped?" and not "is the error
-// audible?". At that drift rate the creatures stay in step with each other
+// audible?". At any of these rates the creatures stay in step with each other
 // regardless -- they all follow the same PHC -- and the error that accumulates
 // is between audio playout and servo motion. Reaching a marginal 10 ms of that
-// takes 27 hours, so detection is not the binding constraint; noticing the
-// fault is.
+// takes somewhere between 8 and 28 hours, at the range of rates above -- so
+// detection is not the binding constraint however the rate is measured;
+// noticing the fault is.
 inline constexpr int64_t PHC_MAX_OFFSET_NS = 50'000;
 
 /**
