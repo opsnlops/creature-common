@@ -187,28 +187,53 @@ plainly: **nothing in CI exercises the real backends.** `AudioEngine_test` runs
 against a fake output, and there is no ALSA backend or mixer test anywhere. So
 "nothing changed" can only be established by ear.
 
-And there is a silent failure mode. `CREATURE_HAS_ALSA` is a **`PRIVATE`**
-compile definition on the consumer's own target, set under `if(ALSA_FOUND)` — on
-the controller at `CMakeLists.txt:207-210`, and the server has the identical
-pattern at `CMakeLists.txt:463` and `728-729`. `AlsaMixerControl.cpp` compiles to
-a do-nothing branch without it.
+And there is a silent failure mode — **but only if `AlsaMixerControl` moves.**
+Being precise about this matters in both directions, so nobody thinks the guard
+covers the backends, and nobody skips it because the backends do not need it.
 
-A `PRIVATE` definition on a consumer target **cannot reach a library target**.
-So if `AlsaMixerControl.cpp` moves into creature-common and creature-common does
-not set the definition itself, it compiles with the guard undefined *by default,
-not by mistake*. Everything builds, every test passes, audio plays — and the
-hardware volume setting silently stops being applied, on both consumers.
+`CREATURE_HAS_ALSA` appears in `AlsaMixerControl.cpp` and nowhere else: lines 8,
+14 and 78 on the controller, and 10, 16 and 77 on the server, where it was
+checked in this repo. **Both backends use it zero times.** Without it the mixer
+compiles to a do-nothing branch.
+
+It is a **`PRIVATE`** compile definition on the consumer's own target, set under
+`if(ALSA_FOUND)` — controller `CMakeLists.txt:207-210`, server `CMakeLists.txt:463`
+and `728-729`, the identical pattern. And a `PRIVATE` definition on a consumer
+target **cannot reach a library target**. So a moved `AlsaMixerControl.cpp`
+compiles with the guard undefined *by default, not by anyone's mistake*:
+everything builds, every test passes, audio plays, and the hardware volume
+setting silently stops being applied — on both consumers.
 
 **The gate that makes the check real**, in three parts:
 
-1. **A mechanical diff gate.** Each moved file is diffed against the
-   controller's copy at the pinned commit, with the allowed differences listed in
-   advance — include lines only. Anything else fails the gate. "Unchanged" should
-   be enforced, not promised.
+1. **A mechanical diff gate, with every allowed difference enumerated in
+   advance.** "Include lines only" will not do: it fails the first time it runs,
+   and a gate that fails on day one gets loosened on the spot, which is the one
+   thing it exists to prevent. The allowed differences are exactly:
+
+   - include lines
+   - `AudioConfig` → `AudioOutputConfig` at `AudioOutput.h:18`,
+     `AlsaAudioOutput.cpp:85` and `CoreAudioOutput.cpp:112` — the `open()`
+     signature, three sites
+   - nothing else
+
+   **The namespace stays `creatures::audio`.** Changing it would add diff lines
+   and force call-site edits in both consumers.
+
+   It is a **script, run at two moments**, not CI: at step 1, that the copy is
+   faithful; at step 4, that the shared copy still matches the controller's last
+   local copy. After step 4 there is nothing local left to compare and the
+   ownership rule takes over. Paste its output into each PR. CI would be
+   cross-repo machinery for a check that runs twice.
+
 2. **A build-time guard.** `find_package(ALSA REQUIRED)` on Linux in
    creature-common (the controller already requires it at `CMakeLists.txt:159`),
    plus a hard build error if `CREATURE_HAS_ALSA` is undefined on Linux. A
-   missing definition must break the build rather than the volume.
+   missing definition must break the build rather than the volume. **This also
+   means creature-common's Linux CI runners need `libasound2-dev`** — without it
+   every Linux job fails the moment `find_package(ALSA REQUIRED)` lands. Part of
+   step 1.
+
 3. **Hardware checks, per consumer**: `outputVolumePercent` is applied at
    startup; the ALSA channel map puts each speaker in the right place on the
    router's 8-channel AVR setup; the underrun count stays at zero; RTCP sync
@@ -226,13 +251,38 @@ move. That put the birds at risk before anything had been learned.
    on the way past forfeits that.
 2. **The server adopts it**, deletes its own sink files, and the config narrowing
    lands in the same commit. Prove it in travel mode on real speakers.
-3. **Soak.** The server is the consumer that gains; let it carry the shared code
-   for a while before anything else depends on it.
-4. **The controller switches — optional, last, and gated.** Only after the
-   mechanical diff gate and the build-time guard are in place, and only with
-   hardware checks on a bird and on the router. **If this step never happens, the
-   controller loses nothing**, and that is the point: the risk sits with the
-   party that benefits until the benefit is demonstrated.
+3. **Soak — and April decides when it ends, not either session.** The server is
+   the consumer that gains, so let it carry the shared code before anything else
+   depends on it. The bar to clear: travel mode used for real playback, with zero
+   underruns. "A while" is not an exit criterion and neither session should be
+   the one declaring it met.
+4. **The controller switches — optional, last, and gated.** Only after the diff
+   gate and the build-time guard are in place, with hardware checks on a bird and
+   on the router, and with April's go-ahead. **If this step never happens, the
+   controller loses nothing**, and that is the point: the risk sits with the party
+   that benefits until the benefit is demonstrated.
+
+   **This step has a handover the earlier plan missed entirely.** After step 1,
+   six constants exist in two headers in the same namespace:
+
+   - `TARGET_PLAYOUT_FRAMES`
+   - `PACKET_WAIT_MS`
+   - `AUDIO_DEVICE_PERIOD_FRAMES`
+   - `AUDIO_OUTPUT_RING_FRAMES`
+   - `DEFAULT_SOUND_DEVICE_NUMBER`
+   - `DEFAULT_COMMON_PLAYOUT_DELAY_MS`
+
+   Two `inline constexpr` definitions of one name in one translation unit will not
+   compile, so at step 4 the controller must delete its own definitions — and the
+   diff gate must check that the **shared values equal the controller's** before
+   it does. The same goes for the struct defaults carried across: `deviceNumber`,
+   `alsaMixerCard{"default"}`, and `commonPlayoutDelayMs`, which defaults to
+   `DEFAULT_COMMON_PLAYOUT_DELAY_MS`.
+
+   That sixth constant was missing from the controller session's own first list of
+   them, and it caught the omission itself on re-review. Recorded because a
+   silently different default is exactly the class of thing this gate exists to
+   catch, and the list being nearly right is how it would have got through.
 
 Hardware verification gates each consumer's own release. It is not a final step
 after everything is wired together.
@@ -283,25 +333,43 @@ session that knows the code:
 - ~~Does anything still need `OUTPUT_CH = 1`?~~ **Yes**, the engine's Opus
   decoder (`AudioEngine.cpp:150`). Not a sink matter; stays local.
 
-What remains open:
+Both of the questions this plan raised have now been answered by the controller
+session, as the owner of the behaviour:
 
-1. **Whether `AlsaMixerControl` moves at all.** The server does use hardware
-   volume, so sharing it is worth something — but it is where the silent failure
-   lives. Decide after the sink has soaked, not with it.
-2. **Whether the mechanical diff gate lives in CI or in a script someone runs.**
-   In CI it cannot be forgotten; as a script it is easier to write.
+1. **Does `AlsaMixerControl` move? Default no.** It moves only after the sink has
+   soaked, behind the build-time guard, and with a hardware check that
+   `outputVolumePercent` takes effect on a bird. Until all three hold, it stays
+   local and the server keeps its own copy.
+2. **Diff gate: a script, not CI.** It runs at exactly two moments — step 1 and
+   step 4 — and after step 4 there is nothing local left to compare. Its output
+   gets pasted into each PR.
+
+Nothing is open on the controller side. What is open is everything in
+[Order of work](#order-of-work) that has not been done, which is all of it.
 
 ## What sign-off requires
 
-The controller session listed what it needs, and all of it is now in this
-document: the provenance line qualified; the `AudioConfig` split named as part of
-step 1; the `bufferCapacityMs` rename dropped; the three-part gate; the revised
-order with the server first and the controller's switch optional and last; the
-ownership rule written into [what-belongs-here.md](what-belongs-here.md); and the
-minimal move.
+Two rounds of review by the session that owns creature-controller, both of which
+it conducted as the owner of code running on the creatures every day.
 
-**It has not re-reviewed since these changes.** Until it does, treat the
-controller side of this plan as provisional.
+**Round one** (declined): qualify the provenance line; name the `AudioConfig`
+split as part of step 1; drop the `bufferCapacityMs` rename; add the three-part
+gate; put the server first and the controller's switch optional and last; write
+the ownership rule into [what-belongs-here.md](what-belongs-here.md); shrink the
+move. All done.
+
+**Round two** (declined, three must-fixes): the survey's old Tier 4 text still
+contradicted this plan; the diff gate as written would have failed the first time
+it ran; the step-4 constant handover was missing entirely. All three are fixed
+above, along with its four additions — the soak's owner and exit criterion, the
+guard's precise scope, creature-common's `libasound2-dev` dependency, and its
+answers to both open questions.
+
+**It has not reviewed since round two's fixes.** Until it does, the controller
+side of this plan is provisional.
+
+And when it does sign off, that is **sign-off on the plan, not on step 4**, which
+still needs its gate, its hardware checks, and April's go-ahead at the time.
 
 ## Withdrawn
 
