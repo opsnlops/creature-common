@@ -128,15 +128,34 @@ on the hosts that matter. The shared version shortens names to fit instead.
 
 **Planned in [audio-sink-plan.md](audio-sink-plan.md)**, and it is an *adoption*
 rather than the refactor described below. The controller's sink runs every day
-behind both the controller and the audio-router, so it moves here unchanged and
-the server adopts it; the server's travel mode is already stereo at 48 kHz, so
-nothing has to be generalised to fit it. The 8-channel cap is HDMI's LPCM maximum
+behind both the controller and the audio-router, so it is **copied** here
+unchanged, the server adopts it first, and the controller may switch later — that
+switch is optional and last, because steps that touch the controller risk the
+birds for no gain to them. The server's travel mode is already stereo at 48 kHz,
+so nothing has to be generalised to fit it. The 8-channel cap is HDMI's LPCM maximum
 for the AVR the router feeds, and 48 kHz is the only rate the router opens —
 both describe the hardware and stay. The server's wider config knobs get narrowed
 to match instead.
 
-`AudioOutput` + `AlsaAudioOutput` + `CoreAudioOutput` + `AlsaMixerControl` +
-`AudioOutputKeepalive`. This *is* a diverged fork, and the most expensive one:
+**Ownership rule, once the sink lives here.** The controller owns the sink's
+behaviour; the server is a consumer. Any change to this repo's audio module needs
+review by whoever holds creature-controller, plus a hardware check on a bird and
+on the audio-router, before the controller takes that tag. This matters because
+a creature-common bump taken for an unrelated reason — a timesync fix, say —
+carries whatever changed in the sink along with it. The birds should not inherit
+audio changes as a side effect of a clock fix.
+
+**Scope, as planned:** `AudioOutput` + both backends. `AlsaMixerControl` is
+conditional and waits until the sink has soaked; `AudioOutputKeepalive` stays on
+the controller. Not `AudioEngine`, `PacketReceiver`, `RoutingMixer` or
+`RtpJitterBuffer` — that is the receive path, and the server is the sender.
+
+<details>
+<summary><strong>Superseded:</strong> the original "real refactor" analysis (kept for the record, and wrong in one specific)</summary>
+
+This was the first reading of the item, before either codebase was read closely.
+It is **superseded by [audio-sink-plan.md](audio-sink-plan.md)**; do not plan
+from it.
 
 | file | controller | server |
 |---|---|---|
@@ -145,21 +164,20 @@ to match instead.
 | `AlsaMixerControl.cpp` | 141 | 123 |
 | `AudioOutput.h` | 37 | 31 |
 
-**Scope:** the sink only. Not `AudioEngine`, `PacketReceiver`, `RoutingMixer` or
-`RtpJitterBuffer` — that is the receive path, and the server is the sender.
+It said the forks "disagree on purpose": the controller's backends richer (device
+enumeration by index, ALSA channel maps, the ENOTSUPP/HDMI diagnostics) but
+taking "rate and channel count as compile-time constants", the server's
+generalised to runtime rate and arbitrary channels, and that making the
+controller runtime was "the bulk of the work".
 
-**Why it is a real refactor and not a merge.** The forks disagree on purpose. The
-controller's backends are richer (device enumeration by index, ALSA channel maps
-for named `SpeakerChannel`s, much better diagnostics — the ENOTSUPP/HDMI advice is
-genuinely good) but take rate and channel count as compile-time constants from
-`audio-config.h`, hardcoding 48 kHz and rejecting more than 8 channels. The
-server's are simplified but generalized to a runtime sample rate and arbitrary
-channel count, which it needs for 17-channel work.
+**The channel-count half of that is simply wrong.** The controller's count is
+already runtime — `config.channels.size()`. What exists is a cap of 8, which is
+HDMI's LPCM maximum for the AVR the audio-router feeds, so it describes the
+hardware. Only the sample rate is compile-time, and the server does not need it
+otherwise: travel mode is forced to stereo at 48 kHz. Hence adoption rather than
+refactor.
 
-A merged config needs a channel **count** plus an optional speaker **map**, with
-the map driving `configureChannelMap()` only when present. Making rate and
-channels runtime on the controller side is the bulk of the work — more than
-reconciling the two files.
+</details>
 
 ## No, and why
 
