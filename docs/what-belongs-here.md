@@ -126,6 +126,15 @@ on the hosts that matter. The shared version shortens names to fit instead.
 
 ### The audio output sink — [#5](https://github.com/opsnlops/creature-common/issues/5)
 
+**Planned in [audio-sink-plan.md](audio-sink-plan.md)**, and it is an *adoption*
+rather than the refactor described below. The controller's sink runs every day
+behind both the controller and the audio-router, so it moves here unchanged and
+the server adopts it; the server's travel mode is already stereo at 48 kHz, so
+nothing has to be generalised to fit it. The 8-channel cap is HDMI's LPCM maximum
+for the AVR the router feeds, and 48 kHz is the only rate the router opens —
+both describe the hardware and stay. The server's wider config knobs get narrowed
+to match instead.
+
 `AudioOutput` + `AlsaAudioOutput` + `CoreAudioOutput` + `AlsaMixerControl` +
 `AudioOutputKeepalive`. This *is* a diverged fork, and the most expensive one:
 
