@@ -17,8 +17,7 @@ controller's sink to be more general. That was wrong and is withdrawn** — see
 [Withdrawn](#withdrawn) at the end for what and why, because the reasoning is
 worth not repeating.
 
-**Status on the controller side: signed off, pending confirmation that the
-include table below is verbatim.** The session that owns creature-controller
+**Status on the controller side: signed off.** The session that owns creature-controller
 reviewed this document three times — at `beec572`, `a18d98c` and `25d7d5d`,
 against controller `a102c79` — asked to be read as the owner of code that runs on
 the creatures every day, and declined each time. Its objections are incorporated
@@ -446,7 +445,9 @@ passed the step-1 gate first. All four are above.
 **Round three's fixes were verified by diff** (`25d7d5d..e233874`), and sign-off
 granted on one condition: that the gate's include table be written into this
 document now rather than filled in at step 1, verbatim as that session read it
-off `a102c79`. Done above. It is confirming the paste.
+off `a102c79`. Done above, and **confirmed verbatim by diff**
+(`e233874..557d00d`) — three rows, the anchor, and both sides of every row,
+character for character.
 
 The argument for fixing it in advance is worth keeping, because it generalises:
 **if the list is written by the person making the change, the gate certifies
