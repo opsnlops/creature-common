@@ -135,6 +135,14 @@ for the AVR the router feeds, and 48 kHz is the only rate the router opens —
 both describe the hardware and stay. The server's wider config knobs get narrowed
 to match instead.
 
+**Ownership rule, once the sink lives here.** The controller owns the sink's
+behaviour; the server is a consumer. Any change to this repo's audio module needs
+review by whoever holds creature-controller, plus a hardware check on a bird and
+on the audio-router, before the controller takes that tag. This matters because
+a creature-common bump taken for an unrelated reason — a timesync fix, say —
+carries whatever changed in the sink along with it. The birds should not inherit
+audio changes as a side effect of a clock fix.
+
 `AudioOutput` + `AlsaAudioOutput` + `CoreAudioOutput` + `AlsaMixerControl` +
 `AudioOutputKeepalive`. This *is* a diverged fork, and the most expensive one:
 
