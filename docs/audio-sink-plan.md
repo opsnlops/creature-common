@@ -6,6 +6,11 @@
 **Status:** planned, not started. Written 2026-11-10 from a read of both
 codebases.
 
+The controller-side readings below were checked against creature-controller
+`af1efd8` by the session working that repo. Three of the four needed reframing;
+what follows is the reframed version, and the reframings matter more than the
+original claims did.
+
 This plan exists because #5 is the one item on the list where the survey's
 summary is not enough to work from — and, as it turns out, where the summary is
 wrong in several specifics. Those corrections are most of this document's value.
@@ -47,10 +52,26 @@ channels". Half right.
 
 Channels are already runtime: `AudioConfig::channels` is a
 `std::vector<SpeakerChannel>`, so the count is `channels.size()`. What exists is
-a **hard cap**, a literal `channels_ > 8` rejection in both backends
-(`AlsaAudioOutput.cpp:88`, `CoreAudioOutput.cpp:115`). Note the `SpeakerChannel`
-enum has *eleven* values, so the cap is not derived from the map — it is a
-separate, arbitrary limit. Raising it is a two-line change, not a refactor.
+a **hard cap** of 8 — in four places, not the two a first read suggests:
+
+```
+AlsaAudioOutput.cpp:88
+CoreAudioOutput.cpp:115
+AudioConfig.cpp:65          validateAudioEngineConfig, "between one and eight channels"
+AudioOutputKeepalive.cpp:11
+```
+
+Nothing depends on it. ALSA's `configureChannelMap` sizes its `snd_pcm_chmap_t`
+storage from `channels.size()`, CoreAudio sizes its `AudioChannelLayout` the same
+way, the rings scale by `channels_`, and there is no fixed-size per-channel
+storage anywhere in `src/audio`. The cap arrived with `965ce38` (2026-10-09, the
+multichannel HDMI router), and 8 is HDMI's LPCM maximum — so it describes the
+hardware that router was built for rather than a limit of the code.
+
+A cap derived from the map would be **10, not 11**. `SpeakerChannel` has eleven
+values, but `Mono` cannot be combined with others (`AudioConfig.cpp` validation),
+so the largest legal map holds ten. And a device that cannot open ten channels
+already fails at `snd_pcm_hw_params` without a cap's help.
 
 The server has no cap at all: both its backends check only for zero.
 
@@ -70,19 +91,41 @@ CoreAudioOutput.cpp:118,182,430,439,441,445
 Each needs to become `config.sampleRate`. Mechanical, but it touches the
 latency maths, which is where a mistake would be quiet.
 
+**Adding the parameter does not make the sink rate-agnostic, and nothing here
+should be read as claiming it does.** The sink never resamples. It consumes
+whatever the engine writes, and the engine decodes Opus at `rtp::SAMPLE_RATE`
+(`AudioEngine.cpp:150`) in `SAMPLES_PER_FRAME` chunks; ALSA then refuses outright
+any device that cannot do exactly that rate (`AlsaAudioOutput.cpp:142-147`). So
+`sampleRate` means *the rate the producer writes, which the device must match
+exactly* — not *the rate the sink adapts to*. A consumer that wants a different
+rate resamples upstream.
+
+The playout side uses `rtp::SAMPLE_RATE` as well (`AudioEngine.cpp:14,150,376`,
+`RtcpTiming.cpp:19-27,101`, `AudioSubsystem.cpp:110,112`). That is wire rate, and
+it correctly stays compile-time.
+
 ### `commonPlayoutDelayMs` crosses the line the survey draws
 
 The survey says to keep playout logic local, which is right, but the controller's
-sink **reads `config.commonPlayoutDelayMs` itself** to size its queue target
-(`AlsaAudioOutput.cpp:161`, `CoreAudioOutput.cpp:118`). So the sink genuinely
-needs a queue-target parameter; it cannot be left behind as "playout".
+sink **reads `config.commonPlayoutDelayMs` itself** — to size *capacity*, not a
+target:
 
-The server's equivalent is a constant, `NATIVE_AUDIO_QUEUE_TARGET_MS = 100`.
+- ALSA's hardware buffer is `max(TARGET_PLAYOUT_FRAMES · SAMPLES_PER_FRAME,
+  delay + 1 frame)` (`AlsaAudioOutput.cpp:159-161`)
+- CoreAudio's ring is `max(AUDIO_OUTPUT_RING_FRAMES, delay + 2 frames)`
+  (`CoreAudioOutput.cpp:117-120`)
 
-**Consequence:** the shared config needs a `queueTargetMs`. The controller passes
-its `commonPlayoutDelayMs`; the server passes 100. This is the one field the
-survey's split would have dropped, and dropping it would have changed the
-controller's playout timing silently.
+How much actually gets queued is the engine's decision (`rtcpIdleQueueFrames`,
+`AudioEngine.cpp:36,66`), never the sink's. So the field does have to cross into
+the sink config — drop it and a 500 ms delay could no longer fit in the device
+buffer — but it must be named for what the sink does with it:
+**`bufferCapacityMs`**, or a frame count passed directly. Calling it
+`queueTargetMs` would name the *engine's* job and invite someone to implement it
+in the wrong place.
+
+The server's nearest equivalent is the constant
+`NATIVE_AUDIO_QUEUE_TARGET_MS = 100`, worth renaming on the way past for the same
+reason.
 
 ### `audioDeviceCompensationMs` does *not* cross it
 
@@ -140,9 +183,11 @@ struct AudioOutputConfig {
     // named-speaker mapping. channelCount must agree with its size when set.
     std::vector<SpeakerChannel> speakerMap;
 
-    // Queue depth the sink aims to hold. The controller passes its
-    // commonPlayoutDelayMs here; the server passes 100.
-    uint16_t queueTargetMs{100};
+    // Capacity the sink must provide, not a level it tries to hold: the
+    // device buffer and the ring are sized from this. How much is actually
+    // queued is the producer's decision. The controller passes its
+    // commonPlayoutDelayMs; the server passes 100.
+    uint16_t bufferCapacityMs{100};
 
     // Gains and limiter -- already byte-identical in both structs.
     float dialogGainDb{0.0F};
@@ -193,9 +238,9 @@ touching the server.
    backends, and pass `rtp::SAMPLE_RATE` from the call site. Behaviour-identical by
    construction — the value is the same — so this is the safe half of the
    refactor, done while it can still be tested against the controller alone.
-2. **Controller: raise the channel cap** from the literal 8 to something the
-   `SpeakerChannel` enum can justify, or drop it in favour of the server's
-   zero-check.
+2. **Controller: raise or drop the channel cap.** Four places, not two:
+   `AlsaAudioOutput.cpp:88`, `CoreAudioOutput.cpp:115`, `AudioConfig.cpp:65`,
+   `AudioOutputKeepalive.cpp:11`. If a cap is kept, the map-derived figure is 10.
 3. **Controller: split `AudioConfig`** into playout config plus an
    `AudioOutputConfig`-shaped subset. Still controller-local; still testable
    against a bird.
@@ -235,7 +280,9 @@ to make a speaker move.
    controller resolve index → name before calling? Keeping both selectors in one
    struct invites the question of which wins. Resolving early would keep the
    shared config to one way of naming a device.
-2. **Should the 8-channel cap become a validated maximum or just go?** The server
-   runs 17 with no cap at all and has not suffered for it.
+2. **Should the 8-channel cap become a validated maximum or just go?** It
+   records HDMI's LPCM limit from the router it arrived with, not a property of
+   this code, and the server runs 17 with no cap at all. Dropping it leaves
+   `snd_pcm_hw_params` to say no, which it already does.
 3. **Does anything still need `OUTPUT_CH = 1`?** It is in `audio-config.h` and
    did not appear in any sink file during this survey.

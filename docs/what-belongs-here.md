@@ -127,11 +127,12 @@ on the hosts that matter. The shared version shortens names to fit instead.
 ### The audio output sink — [#5](https://github.com/opsnlops/creature-common/issues/5)
 
 **Planned in detail in [audio-sink-plan.md](audio-sink-plan.md)**, which corrects
-several specifics below after a closer read: the two `AudioOutput` interfaces are
-already identical in eight of nine members, the channel count is already runtime
-on both sides (what exists is an arbitrary cap), and the sink reads
-`commonPlayoutDelayMs` itself — so a queue-target field has to come along rather
-than staying behind as playout config.
+several specifics below after a closer read of both sides: the two `AudioOutput`
+interfaces are already identical in eight of nine members, the channel count is
+already runtime on both sides (what exists is an arbitrary cap recording HDMI's
+LPCM limit, in four places), and the sink sizes its buffer *capacity* from
+`commonPlayoutDelayMs` — so that field has to come along rather than staying
+behind as playout config, under a name that says capacity.
 
 `AudioOutput` + `AlsaAudioOutput` + `CoreAudioOutput` + `AlsaMixerControl` +
 `AudioOutputKeepalive`. This *is* a diverged fork, and the most expensive one:
