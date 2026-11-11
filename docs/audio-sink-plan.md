@@ -17,11 +17,16 @@ controller's sink to be more general. That was wrong and is withdrawn** — see
 [Withdrawn](#withdrawn) at the end for what and why, because the reasoning is
 worth not repeating.
 
-**Status on the controller side: provisional, not signed off.** The session that
-owns creature-controller reviewed this document at `beec572` against controller
-`a102c79`, asked to be read as the owner of code that runs on the creatures every
-day, and declined sign-off. Its objections are incorporated below and listed
-under [What sign-off requires](#what-sign-off-requires).
+**Status on the controller side: signed off, pending confirmation that the
+include table below is verbatim.** The session that owns creature-controller
+reviewed this document three times — at `beec572`, `a18d98c` and `25d7d5d`,
+against controller `a102c79` — asked to be read as the owner of code that runs on
+the creatures every day, and declined each time. Its objections are incorporated
+throughout and listed under
+[What sign-off took](#what-sign-off-took).
+
+**Sign-off on the plan is not sign-off on step 4**, which keeps its gate, its
+hardware checks and April's go-ahead when the time comes.
 
 A note on where the facts here come from, because an earlier version of this line
 overstated it. That session checked four controller-side claims in the *first*
@@ -212,15 +217,43 @@ setting silently stops being applied — on both consumers.
    thing it exists to prevent. The allowed differences are exactly:
 
    - **each include line, listed before → after, per file.** "Include lines" is
-     still an open category and must not stay one: an *added* include passes a
-     category-level gate and can change behaviour through a macro or an
-     overload. The list is filled in at step 1 from the controller's files at the
-     pinned commit — this document does not invent it, because the person doing
-     the move should read it off the real files rather than trust a transcription.
+     an open category and must not stay one: an *added* include passes a
+     category-level gate and can change behaviour through a macro or an overload.
+
+     The list is fixed **here and now**, not at step 1. An earlier version of
+     this plan deferred it, on the reasoning that whoever does the move should
+     read it off the real files rather than trust a transcription. The controller
+     session overruled that, correctly: if the list is written by the person
+     making the change, then the gate certifies itself. The "before" side below
+     was read off controller `a102c79` by that session, with `git show`.
+
+     | file (`a102c79`) | line | before | after |
+     |---|---|---|---|
+     | `AudioOutput.h` | 9 | `#include "audio/audio-config.h"` | `#include "creature/audio/AudioOutputConfig.h"` |
+     | `AlsaAudioOutput.cpp` | 1 | `#include "audio/AudioOutput.h"` | `#include "creature/audio/AudioOutput.h"` |
+     | `CoreAudioOutput.cpp` | 1 | `#include "audio/AudioOutput.h"` | `#include "creature/audio/AudioOutput.h"` |
+
+     **Only those three change.** Every other include in those files stays
+     byte-identical, system and platform headers included —
+     `<alsa/asoundlib.h>` and the three Apple frameworks among them.
+     `AudioOutput.h:10` (`#include "creature/logging/Logger.h"`) is already a
+     creature-common path and does not change.
+
+     Step 1 verifies against this table. If it needs different target paths, the
+     step-1 PR amends the table, and **that amendment needs controller review** —
+     which is the whole point of fixing it in advance.
    - `AudioConfig` → `AudioOutputConfig` at `AudioOutput.h:18`,
      `AlsaAudioOutput.cpp:85` and `CoreAudioOutput.cpp:112` — the `open()`
      signature, three sites
    - nothing else
+
+   **The one file the gate cannot cover is `AudioOutputConfig.h`**, because it is
+   new: there is nothing to diff it against. The constant-and-default value check
+   covers it instead. It holds `AudioOutputConfig`, `SpeakerChannel` and the six
+   constants, and **it must include `creature/rtp/Protocol.h`** — today the
+   backends receive `rtp::SAMPLE_RATE` and `rtp::SAMPLES_PER_FRAME` through
+   `audio-config.h`. Omitting it is a compile error rather than a silent failure,
+   but it is written here to save step 1 the surprise.
 
    **Every line number in this section is anchored to controller `a102c79`.**
    They will drift as the controller changes, and the step-4 run needs to know
@@ -386,7 +419,7 @@ session, as the owner of the behaviour:
 Nothing is open on the controller side. What is open is everything in
 [Order of work](#order-of-work) that has not been done, which is all of it.
 
-## What sign-off requires
+## What sign-off took
 
 Two rounds of review by the session that owns creature-controller, both of which
 it conducted as the owner of code running on the creatures every day.
@@ -410,11 +443,22 @@ missing from the step-4 handover; "include lines" left as an open category in th
 gate, with its line numbers unanchored; and the soak counting only for code that
 passed the step-1 gate first. All four are above.
 
-**It has not verified since round three's fixes.** Until it does, the controller
-side of this plan is provisional.
+**Round three's fixes were verified by diff** (`25d7d5d..e233874`), and sign-off
+granted on one condition: that the gate's include table be written into this
+document now rather than filled in at step 1, verbatim as that session read it
+off `a102c79`. Done above. It is confirming the paste.
 
-And when it does sign off, that is **sign-off on the plan, not on step 4**, which
-still needs its gate, its hardware checks, and April's go-ahead at the time.
+The argument for fixing it in advance is worth keeping, because it generalises:
+**if the list is written by the person making the change, the gate certifies
+itself.** This plan had deferred it for a defensible-sounding reason — not
+wanting a transcription of someone else's files to become the reference — and
+that reason was worse.
+
+Three rounds, nineteen separate objections, and the three most valuable were all
+silent failures: a `PRIVATE` compile definition that cannot reach a library
+target, a derived member legally hiding a base member past `-Wshadow`, and a soak
+that would have measured code the creatures do not run. None was reachable by
+reasoning from this side; each came from the party holding the code.
 
 ## Withdrawn
 
