@@ -1,288 +1,197 @@
-# Sharing the audio output sink
+# Giving the server the audio sink the controller already runs
 
 **Issue:** [#5](https://github.com/opsnlops/creature-common/issues/5) — Tier 4 in
 [what-belongs-here.md](what-belongs-here.md), the last item from the sharing survey.
 
-**Status:** planned, not started. Written 2026-11-10 from a read of both
-codebases.
+**Status:** planned, not started. Written 2026-11-10, then rewritten the same
+night after April set the direction.
 
-The controller-side readings below were checked against creature-controller
-`af1efd8` by the session working that repo. Three of the four needed reframing;
-what follows is the reframed version, and the reframings matter more than the
-original claims did.
+**The direction, in her words:** don't rewrite the audio engine. Use the one the
+controller has — it runs every day, both the controller and the audio-router
+depend on it, and it is battle tested. The server should run that same code when
+it is in local audio mode, which is mostly travel mode.
 
-This plan exists because #5 is the one item on the list where the survey's
-summary is not enough to work from — and, as it turns out, where the summary is
-wrong in several specifics. Those corrections are most of this document's value.
+That makes this an adoption, not a refactor, and it is much smaller than the
+first version of this plan assumed. **The earlier plan proposed changing the
+controller's sink to be more general. That was wrong and is withdrawn** — see
+[Withdrawn](#withdrawn) at the end for what and why, because the reasoning is
+worth not repeating.
+
+Controller-side facts below were checked against creature-controller `af1efd8`
+by the session that works that repo.
 
 ---
 
-## What the survey got wrong
+## Why no refactor is needed
 
-The survey calls this "a genuine refactor rather than a move" and "the largest
-item". The second is true by line count. The first is true, but for narrower
-reasons than it claims, and the refactor is smaller than it sounds.
+The first plan's whole premise was that the controller's sink is too specific to
+serve the server: 48 kHz fixed, maximum 8 channels. Both are true. Neither
+matters.
+
+**Travel mode is already stereo.** `CommandLine.cpp:504-508` ignores
+`--sound-channels` in travel mode and sets 2, with a warning if you passed
+anything else. The default rate is 48000. So the server's real local-audio case
+is stereo at 48 kHz, which the controller's sink takes unchanged.
+
+Travel mode drives a pair of powered speakers, which is what that stereo is for.
+Worth knowing that the force is a choice rather than a limit: if an AVR over HDMI
+ever travels — April's assessment is "too much to carry", so not a common path —
+the shared sink already allows up to 8 channels, because that ceiling *is* the
+HDMI ceiling. The only obstacle would be the hard `setSoundChannels(2)` in travel
+mode, which would become "up to 8, defaulting to 2". **Narrowing the config to
+1-8 does not foreclose that case; it is exactly the range that case needs.**
+
+**The 8-channel cap is a hardware ceiling, not an accident.** It arrived with
+`965ce38` and the multichannel HDMI router, and the audio-router delivers digital
+audio over HDMI to an AVR — 8 is HDMI's LPCM maximum. The cap documents the
+hardware. Raising it would describe a device nobody has.
+
+**48 kHz is the wire rate and the router's only rate.** The router has no
+sample-rate setting at all; it opens devices through the same `AlsaAudioOutput`,
+which refuses anything that is not exactly 48 kHz
+(`AlsaAudioOutput.cpp:142-147`). The sink never resamples — it consumes what its
+producer writes.
+
+## What is shared, and what is not
+
+The server already owns a complete file-to-PCM pipeline. The controller has no
+counterpart for any of it, because every producer over there is RTP receive →
+Opus decode → `RoutingMixer` → sink. Nothing in the controller or the router
+reads audio from disk.
+
+| shared (moves here) | server keeps | controller keeps |
+|---|---|---|
+| `AudioOutput` + both backends | `DecodedAudioStream` | `AudioEngine` |
+| `AlsaMixerControl` | `MonoWavDownmixer` | `PacketReceiver` |
+| `AudioOutputKeepalive` | `LocalAudioPlaybackCoordinator` | `RoutingMixer` |
+| | `NativeAudioPlaybackService` | `RtpJitterBuffer` |
+
+The sink is the whole overlap, exactly as #5 scoped it.
 
 ### The interfaces are already the same
 
-The survey's table compares file sizes and leaves the impression of two
-divergent designs. They aren't. Here are both `AudioOutput` interfaces:
-
-| | controller | server |
-|---|---|---|
-| `open(…)` | `const AudioConfig &` | `const NativeAudioConfig &` |
-| `start()` | same | same |
-| `stopAndClear()` | same | same |
-| `close()` | same | same |
-| `write(std::span<const int16_t>)` | same | same |
-| `queuedFrames()` | same | same |
-| `pipelineLatencyFrames()` | same | same |
-| `underruns()` | same | same |
-| factory | `createAudioOutput(shared_ptr<Logger>)` | `createAudioOutput()` |
-
-Eight of nine members are identical in name and signature. The only real
-differences are the config type and the injected logger. **The interface does
-not need designing; it needs picking.**
-
-### The channel count is already runtime on both sides
-
-The survey says the controller "takes rate and channels as compile-time
-constants from `audio-config.h`, hardcoding 48 kHz and rejecting more than 8
-channels". Half right.
-
-Channels are already runtime: `AudioConfig::channels` is a
-`std::vector<SpeakerChannel>`, so the count is `channels.size()`. What exists is
-a **hard cap** of 8 — in four places, not the two a first read suggests:
-
-```
-AlsaAudioOutput.cpp:88
-CoreAudioOutput.cpp:115
-AudioConfig.cpp:65          validateAudioEngineConfig, "between one and eight channels"
-AudioOutputKeepalive.cpp:11
-```
-
-Nothing depends on it. ALSA's `configureChannelMap` sizes its `snd_pcm_chmap_t`
-storage from `channels.size()`, CoreAudio sizes its `AudioChannelLayout` the same
-way, the rings scale by `channels_`, and there is no fixed-size per-channel
-storage anywhere in `src/audio`. The cap arrived with `965ce38` (2026-10-09, the
-multichannel HDMI router), and 8 is HDMI's LPCM maximum — so it describes the
-hardware that router was built for rather than a limit of the code.
-
-A cap derived from the map would be **10, not 11**. `SpeakerChannel` has eleven
-values, but `Mono` cannot be combined with others (`AudioConfig.cpp` validation),
-so the largest legal map holds ten. And a device that cannot open ten channels
-already fails at `snd_pcm_hw_params` without a cap's help.
-
-The server has no cap at all: both its backends check only for zero.
-
-### The sample rate is the real compile-time assumption
-
-This is the part that is genuinely a refactor. `AudioConfig` has no
-`sampleRate` field, and both controller backends reach for `rtp::SAMPLE_RATE`
-directly — setting the ALSA rate, setting `format.mSampleRate`, sizing the
-queue target, and converting frames to milliseconds. Twelve occurrences, evenly
-split:
-
-```
-AlsaAudioOutput.cpp:138,142,143,145,161,392
-CoreAudioOutput.cpp:118,182,430,439,441,445
-```
-
-Each needs to become `config.sampleRate`. Mechanical, but it touches the
-latency maths, which is where a mistake would be quiet.
-
-**Adding the parameter does not make the sink rate-agnostic, and nothing here
-should be read as claiming it does.** The sink never resamples. It consumes
-whatever the engine writes, and the engine decodes Opus at `rtp::SAMPLE_RATE`
-(`AudioEngine.cpp:150`) in `SAMPLES_PER_FRAME` chunks; ALSA then refuses outright
-any device that cannot do exactly that rate (`AlsaAudioOutput.cpp:142-147`). So
-`sampleRate` means *the rate the producer writes, which the device must match
-exactly* — not *the rate the sink adapts to*. A consumer that wants a different
-rate resamples upstream.
-
-The playout side uses `rtp::SAMPLE_RATE` as well (`AudioEngine.cpp:14,150,376`,
-`RtcpTiming.cpp:19-27,101`, `AudioSubsystem.cpp:110,112`). That is wire rate, and
-it correctly stays compile-time.
-
-### `commonPlayoutDelayMs` crosses the line the survey draws
-
-The survey says to keep playout logic local, which is right, but the controller's
-sink **reads `config.commonPlayoutDelayMs` itself** — to size *capacity*, not a
-target:
-
-- ALSA's hardware buffer is `max(TARGET_PLAYOUT_FRAMES · SAMPLES_PER_FRAME,
-  delay + 1 frame)` (`AlsaAudioOutput.cpp:159-161`)
-- CoreAudio's ring is `max(AUDIO_OUTPUT_RING_FRAMES, delay + 2 frames)`
-  (`CoreAudioOutput.cpp:117-120`)
-
-How much actually gets queued is the engine's decision (`rtcpIdleQueueFrames`,
-`AudioEngine.cpp:36,66`), never the sink's. So the field does have to cross into
-the sink config — drop it and a 500 ms delay could no longer fit in the device
-buffer — but it must be named for what the sink does with it:
-**`bufferCapacityMs`**, or a frame count passed directly. Calling it
-`queueTargetMs` would name the *engine's* job and invite someone to implement it
-in the wrong place.
-
-The server's nearest equivalent is the constant
-`NATIVE_AUDIO_QUEUE_TARGET_MS = 100`, worth renaming on the way past for the same
-reason.
-
-### `audioDeviceCompensationMs` does *not* cross it
-
-Checked: it appears nowhere in the sink files. It is playout-only and stays on
-the controller.
-
-### `AudioOutputKeepalive` is controller-only
-
-The server has the constant (`NATIVE_AUDIO_KEEPALIVE_FRAMES = 960`) but no
-implementation. So this is a move, and it is also the server *gaining* something.
-
----
-
-## What is actually shared, and what each side gains
-
-**The controller's copy is richer** where the survey says it is, and this is the
-part to preserve:
-
-- device enumeration by index (`deviceNumber`)
-- ALSA channel-map configuration for named `SpeakerChannel`s (`snd_pcm_set_chmap`
-  — controller only, both backends)
-- the diagnostics. `AlsaAudioOutput.cpp:107` decodes `ENOTSUPP` (524), which
-  neither libc nor ALSA describes; `:116` explains that a Pi HDMI output with no
-  audio-capable display attached will fail this way. The server has **zero**
-  occurrences of either. This is the single best reason to do the work.
-
-**The server's copy is more general:** runtime rate, no channel cap, 17 channels
-in production.
-
-Neither is a superset. That is why it is a refactor.
-
----
-
-## The merged config
-
-Most fields are already identical in both structs — same names, same types, same
-defaults — so this is less invention than it looks.
-
-```cpp
-namespace creature::audio {
-
-struct AudioOutputConfig {
-    // Device selection. Name wins when both are set; number is how the
-    // controller selects, name is how the server does.
-    std::optional<std::string> deviceName;
-    std::optional<uint8_t> deviceNumber;
-
-    // Format. Runtime on both sides after this change.
-    uint32_t sampleRate{48'000};
-    uint16_t channelCount{1};
-
-    // Optional, and only meaningful on ALSA: drives configureChannelMap()
-    // when present, skipped entirely when empty. The server leaves it empty
-    // and gets today's behaviour; the controller fills it and keeps its
-    // named-speaker mapping. channelCount must agree with its size when set.
-    std::vector<SpeakerChannel> speakerMap;
-
-    // Capacity the sink must provide, not a level it tries to hold: the
-    // device buffer and the ring are sized from this. How much is actually
-    // queued is the producer's decision. The controller passes its
-    // commonPlayoutDelayMs; the server passes 100.
-    uint16_t bufferCapacityMs{100};
-
-    // Gains and limiter -- already byte-identical in both structs.
-    float dialogGainDb{0.0F};
-    float bgmGainDb{0.0F};
-    float limiterCeilingDb{-1.0F};
-
-    // Mixer -- also already identical.
-    std::optional<uint8_t> outputVolumePercent;
-    std::string alsaMixerCard{"default"};
-    std::string alsaMixerElement;
-};
-
-} // namespace creature::audio
-```
-
-Deliberately **not** in it: `commonPlayoutDelayMs` and
-`audioDeviceCompensationMs` as such. The controller keeps its own
-`AudioConfig` for playout and builds an `AudioOutputConfig` from it. Its current
-struct does double duty for sink and playout, and separating those is part of
-the work rather than an accident of it.
-
-Period and ring sizes (`256` / `8192`) are identical constants on both sides
-already; they stay constants here rather than becoming fields, until something
-needs them to differ.
-
-## The interface
-
-Take the controller's, including the injected logger:
+Eight of the nine `AudioOutput` members are identical in name and signature
+across the two copies. The only differences are the config type and that the
+controller injects a `creature::Logger`. Take the controller's, logger included:
+the server already adapts that interface via `SharedLibraryLogger` for mDNS and
+timesync, so it costs an adapter already written.
 
 ```cpp
 std::unique_ptr<AudioOutput> createAudioOutput(std::shared_ptr<creature::Logger> log);
 ```
 
-The server logs through spdlog free functions in its copy, but it already has
-`SharedLibraryLogger`, which adapts exactly this interface and is already used
-for mDNS and timesync. So this costs the server one adapter it has already
-written, and it buys the diagnostics, which are the point.
+## What the server has to do
 
----
+The sink's contract, as the controller's code actually defines it:
+
+- `write()` takes interleaved `int16` at exactly the wire rate. **The feeder owns
+  all conversion and the 17-to-2 downmix.** The server already does this —
+  `MonoWavDownmixer` and `readLocalOutputFrames` — so nothing new is needed.
+- `open()` reads `commonPlayoutDelayMs` to size the device buffer and ring. That
+  is **capacity**, not a level the sink tries to hold; how much is actually
+  queued is the producer's decision. The server must pass something that fits
+  its own queue depth, or a deep queue will not fit in the device buffer.
+- The config needs one field named for that: **`bufferCapacityMs`**. Calling it
+  `queueTargetMs` would name the producer's job and invite someone to implement
+  it in the sink.
+
+### Narrow the server's config to match — in the same change
+
+The server's validation is wider than any sink it would be using:
+
+| knob | server accepts today | the shared sink accepts |
+|---|---|---|
+| `--sound-frequency` | 8000–384000 | 48000 only |
+| `--sound-channels` (non-travel Local) | 1–64, default 6 | 1–8 |
+| `--sound-channels` (travel) | forced to 2 | fine |
+
+April's call: narrow it. 48 kHz and 1–8 channels is what the router has run
+every day, so this makes the server's knobs describe reality rather than fail
+later at device-open.
+
+**Do it in the same commit as the sink swap, not before.** The server's *current*
+sink really does handle 1–64 channels and 8k–384k. Narrowing first would remove
+working capability for no reason and leave a window where the config is a lie in
+the other direction.
+
+### One genuine decision: the keepalive
+
+The two sides keep the device warm differently. The controller has
+`AudioOutputKeepalive` as its own class. The server does it inside
+`NativeAudioPlaybackService`, as a bounded silence queue between clips. Same
+idea, two shapes, and adopting the controller's reaches further into the server
+than swapping the sink does. Worth deciding deliberately rather than by
+whichever file gets edited first.
 
 ## Order of work
 
-Each step is separately verifiable, and the first three are reversible without
-touching the server.
+1. **Move the sink here unchanged**, from the controller: `AudioOutput`, both
+   backends, `AlsaMixerControl`, `AudioOutputKeepalive`. No behaviour changes, no
+   improvements, no tidying. The point of this item is that this code is already
+   trusted; editing it on the way past forfeits that.
+2. **Controller consumes it**, deleting its local copies. It should be a no-op
+   for the controller — same code, different include path — and that is the test:
+   if anything about the controller's audio changes, step 1 did too much.
+3. **Server consumes it.** Its feeder adapts to the shared interface, its own
+   sink files are deleted, and the config narrowing lands in the same commit.
+4. **Verify on hardware, both sides.**
 
-1. **Controller: make the sample rate runtime.** Add `sampleRate` to its
-   `AudioConfig`, replace the twelve `rtp::SAMPLE_RATE` uses in the two
-   backends, and pass `rtp::SAMPLE_RATE` from the call site. Behaviour-identical by
-   construction — the value is the same — so this is the safe half of the
-   refactor, done while it can still be tested against the controller alone.
-2. **Controller: raise or drop the channel cap.** Four places, not two:
-   `AlsaAudioOutput.cpp:88`, `CoreAudioOutput.cpp:115`, `AudioConfig.cpp:65`,
-   `AudioOutputKeepalive.cpp:11`. If a cap is kept, the map-derived figure is 10.
-3. **Controller: split `AudioConfig`** into playout config plus an
-   `AudioOutputConfig`-shaped subset. Still controller-local; still testable
-   against a bird.
-4. **creature-common: land the sink** — the interface, both backends built from
-   the controller's copy as the base (it is the richer one), `AlsaMixerControl`,
-   `AudioOutputKeepalive`. Port the server's generality onto it rather than the
-   reverse.
-5. **Controller: consume it**, deleting its local copies.
-6. **Server: consume it**, deleting its local copies. Travel mode must still
-   play stereo and mainstage must still do 17 channels.
-
-Steps 1–3 are worth doing even if 4–6 never happen: they remove the compile-time
-assumptions that make the controller's sink unshareable, and they leave it
-better regardless.
+Note the asymmetry: steps 1–2 risk a system that works every day, for no gain to
+the controller at all. That argues for doing them as literally as possible and
+for leaning on step 2 as the check.
 
 ## Verification
 
-This is the one item where a passing test suite means little. The sink's job is
-to make a speaker move.
+A passing test suite means little here. The sink's job is to make a speaker move.
 
-- **Unit, in creature-common:** config validation only — `channelCount` against
-  `speakerMap.size()`, zero-rate and zero-channel rejection, gain clamping.
-  Round-tripping a config is not evidence.
+- **Unit, here:** config validation only — channel count against the speaker
+  map, zero-rate and zero-channel rejection, gain clamping.
 - **Controller, on a bird:** audio plays, lip sync still lands (read `mouth_slot`
   out of the animation data; ~11 moves/sec is healthy), and the ALSA channel map
-  still puts the right speaker in the right place. A wrong channel map is
-  audible immediately and invisible to any test.
-- **Server, mainstage:** 17-channel output unchanged, per-creature channel
-  isolation intact.
+  still puts the right speaker in the right place. A wrong map is audible
+  instantly and invisible to every test.
+- **Audio-router, into the AVR:** all channels still arrive on the right
+  speakers over HDMI.
 - **Server, travel mode:** stereo out of the local device still works. This is
-  the path the server's own sink exists for, and the one least likely to be
-  exercised by accident.
+  the only path that gains anything, and the one least likely to be exercised by
+  accident.
+- **Server, mainstage:** unchanged by construction — mainstage is RTP and never
+  touches this sink. Worth confirming rather than assuming.
+
+## Considered and declined
+
+**`RoutingMixer` for the server's downmix.** It does 17-to-N with gains,
+crossover and limiter, which sounds like exactly what travel mode wants. But it
+is built from an `AudioEngineConfig` and takes RTP-shaped `DecodedAudioFrame`
+inputs, and the server already has a working downmix. Reusing it would be new
+work for no gain. (Flagged as a header-level guess by the controller session,
+unverified — and not worth verifying, given the above.)
 
 ## Open questions
 
-1. **Is `deviceNumber` worth keeping in the shared struct,** or should the
-   controller resolve index → name before calling? Keeping both selectors in one
-   struct invites the question of which wins. Resolving early would keep the
-   shared config to one way of naming a device.
-2. **Should the 8-channel cap become a validated maximum or just go?** It
-   records HDMI's LPCM limit from the router it arrived with, not a property of
-   this code, and the server runs 17 with no cap at all. Dropping it leaves
-   `snd_pcm_hw_params` to say no, which it already does.
+1. **The keepalive shape**, above.
+2. **Does `deviceNumber` belong in a shared config at all,** or should the
+   controller resolve index to name before calling? Two selectors in one struct
+   invites the question of which wins.
 3. **Does anything still need `OUTPUT_CH = 1`?** It is in `audio-config.h` and
-   did not appear in any sink file during this survey.
+   appears in no sink file.
+4. **Should travel mode's stereo force become a ceiling instead?** Not now —
+   powered speakers are the travelling case. But the shared sink would already
+   support an AVR over HDMI, so the day that travels, the change is one line in
+   `CommandLine.cpp` rather than anything in the audio code.
+
+## Withdrawn
+
+The first version of this plan proposed three controller-side steps: make the
+sample rate runtime (twelve `rtp::SAMPLE_RATE` uses, six per backend), raise or
+drop the 8-channel cap, and split `AudioConfig` into playout plus sink config.
+
+All three were aimed at making the controller's sink general enough for the
+server. The server does not need it to be: travel mode is stereo at 48 kHz by
+force. And two of the three would have made the code *describe the hardware less
+accurately* — 8 is HDMI's LPCM maximum for the AVR the router feeds, and 48 kHz
+is the only rate the router has ever opened.
+
+The reasoning error was treating "the server's config surface is wider" as
+evidence that the server needs the width. It does not; the width was never
+exercised. The narrowing above is the opposite move, and the right one.
